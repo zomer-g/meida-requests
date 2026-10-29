@@ -64,6 +64,7 @@ function cleanInput(meta, input, mode) {
 }
 
 function sfMessage(e) {
+  if (e.message?.startsWith('Salesforce token failed')) return 'החיבור לסיילספורס נכשל: פרטי ה-API (SF_CLIENT_ID / SF_CLIENT_SECRET) חסרים או שגויים';
   if (!(e instanceof SalesforceError)) return 'שגיאה פנימית';
   return (Array.isArray(e.errors) ? e.errors : [e.errors]).map((x) => x?.message).filter(Boolean).join('; ') || e.message;
 }
