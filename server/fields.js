@@ -74,3 +74,6 @@ export const LOOKUPS = {
   request_initiator__c: 'Contact',
   metapel_bakasha__c: 'Contact',
 };
+
+// The request handler: offered only from the portal users of the request's group (see routes.js).
+export const HANDLER_FIELD = 'metapel_bakasha__c';

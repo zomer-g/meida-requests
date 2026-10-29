@@ -2,7 +2,7 @@
 // request record type from the UI API. Cached in memory and refreshed every 30 minutes.
 
 import { sf } from './salesforce.js';
-import { SECTIONS, REQUEST_RECORD_TYPE, LOOKUPS } from './fields.js';
+import { SECTIONS, REQUEST_RECORD_TYPE, LOOKUPS, HANDLER_FIELD } from './fields.js';
 
 const TTL_MS = 30 * 60 * 1000;
 let cache = null;
@@ -32,7 +32,7 @@ export async function getMeta() {
       wide: !!cfg.wide || f.type === 'textarea',
       updateable: f.updateable,
       createable: f.createable,
-      lookup: LOOKUPS[f.name] || null,
+      lookup: f.name === HANDLER_FIELD ? 'handler' : LOOKUPS[f.name] || null,
       options: ['picklist', 'multipicklist'].includes(f.type)
         ? values.map((v) => ({ value: v.value, label: decode(v.label) }))
         : undefined,

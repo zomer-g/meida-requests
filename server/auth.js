@@ -40,17 +40,21 @@ async function identity(req) {
   }
 }
 
-// Resolves req.user = { email, name, role, ownerId, ownerName } or answers 401/403.
+// Resolves req.user = { email, name, role, groupId, contactId } or answers 401/403.
+// ADMIN_EMAILS are always admins; their portal_users row (if any) only adds a group and Contact.
 export async function requireUser(req, res, next) {
   const who = await identity(req);
   if (!who) return res.status(401).json({ error: 'not_signed_in', login_url: '/xhost-auth/login?return_to=/' });
-  if (adminEmails.has(who.email)) {
-    req.user = { ...who, role: 'admin', ownerId: null, ownerName: null };
-    return next();
-  }
   const row = await findUser(who.email);
-  if (!row) return res.status(403).json({ error: 'no_access', email: who.email });
-  req.user = { ...who, role: row.role, ownerId: row.sf_owner_id, ownerName: row.sf_owner_name };
+  const isEnvAdmin = adminEmails.has(who.email);
+  if (!row && !isEnvAdmin) return res.status(403).json({ error: 'no_access', email: who.email });
+  req.user = {
+    ...who,
+    name: row?.name || who.name,
+    role: isEnvAdmin ? 'admin' : row.role,
+    groupId: row?.group_id ?? null,
+    contactId: row?.sf_contact_id ?? null,
+  };
   next();
 }
 
