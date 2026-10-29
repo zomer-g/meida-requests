@@ -1,8 +1,10 @@
-// Single-page portal: #/ list, #/r/<id> request, #/new new request, #/admin users.
+// Single-page portal: #/ requests (all boards or the user's own), #/b/<group> one board,
+// #/r/<id> request, #/new or #/b/<group>/new new request, #/admin users, #/admin/groups, #/admin/log.
 
 const view = document.getElementById('view');
 let me = null;
 let meta = null;
+let boards = [];
 
 // ---------- helpers ----------
 
@@ -45,6 +47,7 @@ function toast(msg, isError = false) {
 
 const fmtDate = (v) => (v ? new Date(v).toLocaleDateString('he-IL') : '');
 const fmtDateTime = (v) => (v ? new Date(v).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' }) : '');
+const isAdmin = () => me.role === 'admin';
 
 function statusPill(status) {
   const cls = status === 'Closed' ? 'closed' : status === 'סירוב' ? 'refused' : status === 'מידע התקבל' ? 'received' : '';
@@ -54,15 +57,26 @@ function statusPill(status) {
 
 function setActiveNav(hash) {
   for (const a of document.querySelectorAll('#nav > a:not(.button)')) {
-    a.classList.toggle('active', a.getAttribute('href') === hash || (hash.startsWith('#/r/') && a.getAttribute('href') === '#/'));
+    const href = a.getAttribute('href');
+    const requests = href === '#/' && (hash === '#/' || hash.startsWith('#/r/') || hash.startsWith('#/b/'));
+    a.classList.toggle('active', href === hash || requests);
   }
 }
+
+const boardById = (id) => boards.find((b) => b.id === id) || null;
 
 // ---------- list ----------
 
 const listState = { q: '', status: 'open', page: 0 };
 
-async function renderList() {
+async function renderList(boardId) {
+  // Students and employees have exactly one board: their group's.
+  if (!me.seesAll) boardId = me.group?.id ?? null;
+  const board = boardById(boardId);
+  if (!me.seesAll && !board) {
+    return view.replaceChildren(h('div', { class: 'card' }, h('h1', {}, 'לא הוגדרה לך קבוצה'),
+      h('p', {}, 'כדי לראות בקשות, מנהל/ת המערכת צריך/ה לשייך אותך לקליניקה או לעובדי התנועה.')));
+  }
   const statusOptions = meta.fields.Status?.options || [];
   const search = h('input', { type: 'search', placeholder: 'חיפוש לפי שם בקשה או מספר', value: listState.q, 'aria-label': 'חיפוש' });
   const status = h('select', { 'aria-label': 'סטטוס' },
@@ -71,10 +85,12 @@ async function renderList() {
     statusOptions.map((o) => h('option', { value: o.value }, o.value === 'Closed' ? 'סגורה' : o.value === 'New' ? 'חדשה' : o.label)));
   status.value = listState.status;
   const body = h('div', {}, h('p', { class: 'muted' }, 'טוען…'));
+  const showBoard = me.seesAll && !board;
 
   const load = async () => {
     body.replaceChildren(h('p', { class: 'muted' }, 'טוען…'));
     const params = new URLSearchParams({ q: listState.q, status: listState.status, page: listState.page });
+    if (board) params.set('board', board.id);
     try {
       const data = await api(`/requests?${params}`);
       if (!data.records.length) return body.replaceChildren(h('p', { class: 'notice' }, 'לא נמצאו בקשות.'));
@@ -84,14 +100,16 @@ async function renderList() {
         h('td', { class: 'hide-sm' }, r.request_org_name__r?.Name || ''),
         h('td', {}, statusPill(r.Status)),
         h('td', { class: 'hide-sm' }, r.metapel_bakasha__r?.Name || ''),
-        me.role === 'admin' ? h('td', { class: 'hide-sm' }, r.Owner?.Name || '') : null,
+        showBoard ? h('td', { class: 'hide-sm' }, r.board || '') : null,
+        me.seesAll ? h('td', { class: 'hide-sm' }, r.Owner?.Name || '') : null,
         h('td', { class: 'num hide-sm' }, fmtDate(r.request_date__c)),
         h('td', { class: 'num hide-sm' }, fmtDate(r.LastModifiedDate))));
       body.replaceChildren(
         h('div', { class: 'table-wrap card', style: 'padding:0' }, h('table', {},
           h('thead', {}, h('tr', {},
             h('th', {}, 'מס׳'), h('th', {}, 'שם הבקשה'), h('th', { class: 'hide-sm' }, 'גוף מבוקש'), h('th', {}, 'סטטוס'),
-            h('th', { class: 'hide-sm' }, 'מטפל/ת'), me.role === 'admin' ? h('th', { class: 'hide-sm' }, 'בעלים') : null,
+            h('th', { class: 'hide-sm' }, 'מטפל/ת'), showBoard ? h('th', { class: 'hide-sm' }, 'לוח') : null,
+            me.seesAll ? h('th', { class: 'hide-sm' }, 'בעלים') : null,
             h('th', { class: 'hide-sm' }, 'הוגשה'), h('th', { class: 'hide-sm' }, 'עודכנה'))),
           h('tbody', {}, rows))),
         h('div', { class: 'pager' },
@@ -107,11 +125,18 @@ async function renderList() {
   search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => { listState.q = search.value.trim(); listState.page = 0; load(); }, 350); });
   status.addEventListener('change', () => { listState.status = status.value; listState.page = 0; load(); });
 
+  const tabs = me.seesAll
+    ? h('nav', { class: 'tabs', 'aria-label': 'לוחות' },
+      h('a', { href: '#/', class: board ? null : 'active', onclick: () => { listState.page = 0; } }, 'כל הלוחות'),
+      boards.map((b) => h('a', { href: `#/b/${b.id}`, class: board?.id === b.id ? 'active' : null, onclick: () => { listState.page = 0; } }, b.name)))
+    : null;
+
   view.replaceChildren(
     h('div', { class: 'record-head' },
-      h('div', {}, h('h1', {}, 'בקשות חופש מידע'),
-        h('p', { class: 'muted' }, me.role === 'admin' ? 'כל הבקשות בארגון' : `הבקשות של ${me.ownerName || 'הקליניקה'}`)),
-      h('a', { class: 'button is-primary', href: '#/new' }, '+ בקשה חדשה')),
+      h('div', {}, h('h1', {}, board ? `בקשות · ${board.name}` : 'בקשות חופש מידע'),
+        h('p', { class: 'muted' }, board ? (board.kind === 'staff' ? 'הבקשות של עובדי התנועה (כל מי שאינו קליניקה)' : `הבקשות של ${board.name}`) : 'כל הבקשות בכל הלוחות')),
+      h('a', { class: 'button is-primary', href: board ? `#/b/${board.id}/new` : '#/new' }, '+ בקשה חדשה')),
+    ...(tabs ? [tabs] : []),
     h('div', { class: 'toolbar' }, h('div', { class: 'search' }, search), h('div', {}, status)),
     body);
   load();
@@ -119,8 +144,11 @@ async function renderList() {
 
 // ---------- form fields ----------
 
-function lookupInput(f, value) {
+// ctx.groupId: the request's group, which decides who may be picked as handler.
+function lookupInput(f, value, ctx = {}) {
   const wrap = h('div', { class: 'lookup' });
+  const isHandler = f.lookup === 'handler';
+  const minChars = isHandler ? 0 : 2;
   let current = value; // { id, name } | null
   const render = () => {
     if (current?.id) {
@@ -128,22 +156,23 @@ function lookupInput(f, value) {
         h('button', { type: 'button', title: 'ניקוי', 'aria-label': `ניקוי ${f.label}`, onclick: () => { current = null; render(); wrap.querySelector('input')?.focus(); } }, '×')));
       return;
     }
-    const input = h('input', { type: 'text', placeholder: 'הקלידו לפחות 2 תווים לחיפוש…', 'aria-label': f.label, autocomplete: 'off' });
+    const input = h('input', { type: 'text', placeholder: isHandler ? 'בחירה מתוך חברי הקבוצה…' : 'הקלידו לפחות 2 תווים לחיפוש…', 'aria-label': f.label, autocomplete: 'off' });
     const list = h('ul', { hidden: true, role: 'listbox' });
     let timer;
-    input.addEventListener('input', () => {
-      clearTimeout(timer);
-      timer = setTimeout(async () => {
-        const q = input.value.trim();
-        if (q.length < 2) { list.hidden = true; return; }
-        try {
-          const { records } = await api(`/lookup/${f.lookup}?q=${encodeURIComponent(q)}`);
-          list.replaceChildren(...(records.length ? records.map((r) => h('li', { role: 'option', onmousedown: (e) => { e.preventDefault(); current = { id: r.id, name: r.name }; render(); } },
-            r.name, r.sub ? h('small', {}, r.sub) : null)) : [h('li', { class: 'muted' }, 'לא נמצאו תוצאות')]));
-          list.hidden = false;
-        } catch (e) { toast(e.message, true); }
-      }, 300);
-    });
+    const search = async () => {
+      const q = input.value.trim();
+      if (q.length < minChars) { list.hidden = true; return; }
+      try {
+        const params = new URLSearchParams({ q });
+        if (isHandler && ctx.groupId) params.set('group', ctx.groupId);
+        const { records } = await api(`/lookup/${f.lookup}?${params}`);
+        list.replaceChildren(...(records.length ? records.map((r) => h('li', { role: 'option', onmousedown: (e) => { e.preventDefault(); current = { id: r.id, name: r.name }; render(); } },
+          r.name, r.sub ? h('small', {}, r.sub) : null)) : [h('li', { class: 'muted' }, isHandler ? 'אין בקבוצה משתמשים מקושרים לסיילספורס' : 'לא נמצאו תוצאות')]));
+        list.hidden = false;
+      } catch (e) { toast(e.message, true); }
+    };
+    input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 300); });
+    if (isHandler) input.addEventListener('focus', search);
     input.addEventListener('blur', () => setTimeout(() => { list.hidden = true; }, 150));
     wrap.replaceChildren(input, list);
   };
@@ -152,7 +181,7 @@ function lookupInput(f, value) {
   return wrap;
 }
 
-function fieldControl(f, record) {
+function fieldControl(f, record, ctx) {
   const v = record?.[f.name] ?? null;
   const id = `f_${f.name}`;
   const disabled = record ? !f.updateable : !f.createable;
@@ -194,7 +223,7 @@ function fieldControl(f, record) {
       break;
     case 'reference': {
       const rel = record?.[f.name.replace(/__c$/, '__r')];
-      control = lookupInput(f, v ? { id: v, name: rel?.Name || v } : null);
+      control = lookupInput(f, v ? { id: v, name: rel?.Name || v } : null, ctx);
       break;
     }
     default:
@@ -212,16 +241,51 @@ function fieldControl(f, record) {
   return wrap;
 }
 
-function buildForm(record) {
+function buildForm(record, ctx) {
   const controls = [];
   const sections = meta.sections.map((s, i) => {
-    const fields = s.fields.map((f) => { const c = fieldControl(f, record); controls.push(c); return c; });
+    const fields = s.fields.map((f) => { const c = fieldControl(f, record, ctx); controls.push(c); return c; });
     return h('details', { class: 'section card', open: i === 0 || null },
       h('summary', {}, h('h2', {}, s.title)),
       h('div', { class: 'form-grid' }, fields));
   });
   const values = () => Object.fromEntries(controls.map((c) => [c.dataset.name, c.control.getValue()]));
   return { sections, values };
+}
+
+// ---------- change log rendering (record history and admin log) ----------
+
+const ACTIONS = {
+  create: 'יצירת בקשה', update: 'עדכון בקשה',
+  user_create: 'הוספת משתמש', user_update: 'עדכון משתמש', user_upsert: 'עדכון משתמש', user_delete: 'הסרת משתמש',
+  group_create: 'הוספת קבוצה', group_update: 'עדכון קבוצה', import: 'ייבוא משתמשים',
+};
+
+const shortValue = (v) => {
+  if (v === null || v === undefined || v === '') return '—';
+  const s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+  return s.length > 140 ? `${s.slice(0, 140)}…` : s;
+};
+
+function changeList(a) {
+  const c = a.changes || {};
+  if (a.action === 'import') {
+    const parts = [`נוספו ${c.added?.length || 0}`, `עודכנו ${c.updated?.length || 0}`, `שורות שגויות ${c.invalid?.length || 0}`];
+    if (c.contactErrors?.length) parts.push(`ללא איש קשר ${c.contactErrors.length}`);
+    return h('details', { class: 'changes' }, h('summary', {}, parts.join(' · ')),
+      h('ul', {},
+        (c.added || []).map((e) => h('li', { dir: 'ltr' }, `+ ${e}`)),
+        (c.updated || []).map((e) => h('li', { dir: 'ltr' }, `~ ${e}`)),
+        (c.invalid || []).map((r) => h('li', {}, `שורה ${r.line}: ${r.error} `, h('span', { dir: 'ltr' }, r.email || '')))));
+  }
+  const entries = Object.entries(c);
+  if (!entries.length) return null;
+  const structured = entries.every(([, v]) => v && typeof v === 'object' && 'to' in v);
+  return h('ul', { class: 'changes' }, entries.map(([k, v]) => (structured
+    ? h('li', {}, h('code', {}, v.label || meta.fields[k]?.label || k), ': ',
+      a.action === 'create' ? null : [h('span', { class: 'from' }, shortValue(v.fromText ?? v.from)), ' ← '],
+      h('span', { class: 'to' }, shortValue(v.toText ?? v.to)))
+    : h('li', {}, h('code', {}, meta.fields[k]?.label || k), ': ', shortValue(v)))));
 }
 
 // ---------- record ----------
@@ -231,7 +295,8 @@ async function renderRecord(id) {
   let data;
   try { data = await api(`/requests/${id}`); } catch (e) { return view.replaceChildren(h('p', { class: 'notice error' }, e.message), h('p', {}, h('a', { href: '#/' }, '→ חזרה לרשימה'))); }
   const r = data.record;
-  const form = buildForm(r);
+  const back = data.group && me.seesAll ? `#/b/${data.group.id}` : '#/';
+  const form = buildForm(r, { groupId: data.group?.id });
   const save = h('button', { class: 'button is-primary', type: 'submit' }, 'שמירת שינויים');
 
   const onSubmit = async (e) => {
@@ -246,110 +311,316 @@ async function renderRecord(id) {
 
   const history = data.history.length
     ? h('ul', { class: 'history' }, data.history.map((a) => h('li', {},
-      h('div', { class: 'when' }, `${fmtDateTime(a.at)} · ${a.email} · ${a.action === 'create' ? 'יצירה' : 'עדכון'}`),
-      a.action === 'update' ? h('div', {}, Object.keys(a.changes || {}).map((k) => h('code', {}, meta.fields[k]?.label || k)).flatMap((x, i) => (i ? [', ', x] : [x]))) : null)))
+      h('div', { class: 'when' }, `${fmtDateTime(a.at)} · ${a.email} · ${ACTIONS[a.action] || a.action}`),
+      a.action === 'update' ? changeList(a) : null)))
     : h('p', { class: 'muted' }, 'אין עדיין שינויים מהפורטל.');
 
   view.replaceChildren(
-    h('p', {}, h('a', { href: '#/' }, '→ חזרה לרשימה')),
+    h('p', {}, h('a', { href: back }, '→ חזרה לרשימה')),
     h('div', { class: 'record-head' },
       h('div', {}, h('h1', {}, r.request_name__c || '(ללא שם)'),
         h('div', { class: 'meta' },
           h('span', {}, `בקשה מס׳ ${r.CaseNumber}`), statusPill(r.Status),
+          data.group ? h('span', {}, `לוח: ${data.group.name}`) : null,
           h('span', {}, `בעלים: ${r.Owner?.Name || ''}`),
           h('span', {}, `נוצרה ${fmtDate(r.CreatedDate)}`),
           h('span', {}, `עודכנה ${fmtDateTime(r.LastModifiedDate)}`)))),
-    h('form', { onsubmit: onSubmit, novalidate: true }, form.sections, h('div', { class: 'actions' }, save, h('a', { class: 'button', href: '#/' }, 'ביטול'))),
+    h('form', { onsubmit: onSubmit, novalidate: true }, form.sections, h('div', { class: 'actions' }, save, h('a', { class: 'button', href: back }, 'ביטול'))),
     h('section', { class: 'card' }, h('h2', {}, 'היסטוריית שינויים בפורטל'), history));
 }
 
 // ---------- new ----------
 
-async function renderNew() {
-  const form = buildForm(null);
+async function renderNew(boardId) {
+  if (!me.seesAll) boardId = me.group?.id ?? null;
+  let board = boardById(boardId);
+  if (!me.seesAll && !board) { location.hash = '#/'; return; }
+  const back = board && me.seesAll ? `#/b/${board.id}` : '#/';
+  // Managers starting from "all boards" choose the board first; the handler picker depends on it.
+  const boardSelect = me.seesAll
+    ? h('select', { id: 'f_board' }, h('option', { value: '' }, '— בחירה —'), boards.map((b) => h('option', { value: b.id }, b.name)))
+    : null;
+  if (boardSelect && board) boardSelect.value = board.id;
+  const ctx = { groupId: board?.id ?? null };
+  const form = buildForm(null, ctx);
   const defaults = { Status: 'New', request_date__c: new Date().toISOString().slice(0, 10) };
   for (const [k, v] of Object.entries(defaults)) {
     const el = form.sections.flatMap((s) => [...s.querySelectorAll(`#f_${k}`)])[0];
     if (el) el.value = v;
   }
-  let ownerSelect = null;
-  if (me.role === 'admin') {
-    ownerSelect = h('select', { id: 'f_owner' }, h('option', { value: '' }, '— אני (משתמש ה-API) —'));
-    api('/admin/owners').then(({ records }) => ownerSelect.append(...records.map((u) => h('option', { value: u.id }, u.name)))).catch(() => {});
-  }
+  const ownerNote = h('p', { class: 'muted' });
+  const describeOwner = () => {
+    if (!board) return ownerNote.replaceChildren('בחרו לוח. הבקשה תשויך לבעלים של הלוח שנבחר.');
+    if (board.kind === 'clinic') return ownerNote.replaceChildren(`הבקשה תשויך ל${board.newOwnerName || board.name} בסיילספורס.`);
+    return ownerNote.replaceChildren(`הבקשה תשויך למשתמש הסיילספורס שלך אם יש כזה, ואחרת ל${board.newOwnerName || 'משתמש ה-API'}.`);
+  };
+  describeOwner();
+  boardSelect?.addEventListener('change', () => { board = boardById(Number(boardSelect.value)); ctx.groupId = board?.id ?? null; describeOwner(); });
+
   const submit = h('button', { class: 'button is-primary', type: 'submit' }, 'יצירת הבקשה');
   const onSubmit = async (e) => {
     e.preventDefault();
     submit.disabled = true;
     try {
-      const res = await api('/requests', { method: 'POST', body: { fields: form.values(), ownerId: ownerSelect?.value || null } });
+      const res = await api('/requests', { method: 'POST', body: { fields: form.values(), boardId: board?.id ?? null } });
       toast(`נוצרה בקשה מס׳ ${res.caseNumber}`);
       location.hash = `#/r/${res.id}`;
     } catch (err) { toast(err.message, true); } finally { submit.disabled = false; }
   };
   view.replaceChildren(
-    h('p', {}, h('a', { href: '#/' }, '→ חזרה לרשימה')),
-    h('h1', {}, 'בקשת מידע חדשה'),
-    h('p', { class: 'muted' }, me.role === 'admin' ? 'הבקשה תשויך לבעלים שתבחרו.' : `הבקשה תשויך ל${me.ownerName || 'קליניקה שלך'}.`),
+    h('p', {}, h('a', { href: back }, '→ חזרה לרשימה')),
+    h('h1', {}, board && !me.seesAll ? `בקשת מידע חדשה · ${board.name}` : 'בקשת מידע חדשה'),
+    ownerNote,
     h('form', { onsubmit: onSubmit, novalidate: true },
-      ownerSelect ? h('div', { class: 'card' }, h('div', { class: 'field' }, h('label', { for: 'f_owner' }, 'בעלי הבקשה בסיילספורס'), ownerSelect)) : null,
+      boardSelect ? h('div', { class: 'card' }, h('div', { class: 'field' }, h('label', { for: 'f_board' }, 'לוח', h('span', { class: 'req' }, '*')), boardSelect)) : null,
       form.sections,
-      h('div', { class: 'actions' }, submit, h('a', { class: 'button', href: '#/' }, 'ביטול'))));
+      h('div', { class: 'actions' }, submit, h('a', { class: 'button', href: back }, 'ביטול'))));
 }
 
-// ---------- admin ----------
+// ---------- admin: users ----------
+
+async function readCsvFile(file) {
+  const buf = await file.arrayBuffer();
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch { return new TextDecoder('windows-1255').decode(buf); } // Hebrew Excel
+}
+
+function importCard(groups, onDone) {
+  const group = h('select', { id: 'i_group' }, h('option', { value: '' }, '— בחירה —'), groups.map((g) => h('option', { value: g.id }, g.name)));
+  const role = h('select', { id: 'i_role' }, h('option', { value: 'student' }, 'סטודנט'), h('option', { value: 'employee' }, 'עובד'));
+  const file = h('input', { type: 'file', id: 'i_file', accept: '.csv,text/csv,text/plain' });
+  const out = h('div');
+  let text = null;
+
+  const preview = async () => {
+    out.replaceChildren();
+    if (!file.files[0] || !group.value) return;
+    text = await readCsvFile(file.files[0]);
+    try {
+      const p = await api('/admin/import/preview', { method: 'POST', body: { groupId: group.value, role: role.value, text } });
+      const label = { new: 'חדש', update: 'עדכון', same: 'קיים', invalid: 'שגוי' };
+      const go = h('button', { class: 'button is-primary', disabled: !(p.counts.new + p.counts.update) }, `ייבוא ${p.counts.new + p.counts.update} משתמשים ל${p.group.name}`);
+      go.addEventListener('click', async () => {
+        go.disabled = true;
+        try {
+          const r = await api('/admin/import', { method: 'POST', body: { groupId: group.value, role: role.value, text } });
+          toast(`נוספו ${r.added}, עודכנו ${r.updated}${r.contactErrors.length ? `, ${r.contactErrors.length} בלי איש קשר בסיילספורס` : ''}`, r.contactErrors.length > 0);
+          onDone();
+        } catch (err) { toast(err.message, true); go.disabled = false; }
+      });
+      out.replaceChildren(
+        h('p', {}, `${p.header ? 'שורת הכותרת דולגה. ' : ''}חדשים: ${p.counts.new} · עדכונים: ${p.counts.update} · קיימים ללא שינוי: ${p.counts.same} · שגויים (לא ייובאו): ${p.counts.invalid}`),
+        h('div', { class: 'table-wrap', style: 'max-height:340px;overflow-y:auto' }, h('table', { class: 'plain' },
+          h('thead', {}, h('tr', {}, h('th', {}, 'שורה'), h('th', {}, 'שם'), h('th', {}, 'מייל'), h('th', {}, 'מצב'), h('th', {}, 'הערה'))),
+          h('tbody', {}, p.rows.map((r) => h('tr', { class: r.status === 'invalid' ? 'bad' : null },
+            h('td', { class: 'num' }, r.line), h('td', {}, r.name), h('td', { dir: 'ltr' }, r.email),
+            h('td', {}, h('span', { class: `pill ${r.status === 'invalid' ? 'refused' : r.status === 'new' ? 'received' : ''}` }, label[r.status])),
+            h('td', {}, r.error || r.note || '')))))),
+        h('div', { style: 'margin-top:14px' }, go));
+    } catch (err) { out.replaceChildren(h('p', { class: 'notice error' }, err.message)); }
+  };
+  for (const el of [group, role, file]) el.addEventListener('change', preview);
+
+  return h('div', { class: 'card' },
+    h('h2', {}, 'ייבוא משתמשים מקובץ CSV'),
+    h('p', { class: 'muted' }, 'עמודה ראשונה: שם, עמודה שנייה: כתובת מייל של Google. שורת כותרת מזוהה ומדלגים עליה. משתמש שכבר קיים יועבר לקבוצה שנבחרה (התפקיד שלו לא משתנה). לפני הייבוא תוצג תצוגה מקדימה.'),
+    h('div', { class: 'form-grid' },
+      h('div', { class: 'field' }, h('label', { for: 'i_group' }, 'קבוצה', h('span', { class: 'req' }, '*')), group),
+      h('div', { class: 'field' }, h('label', { for: 'i_role' }, 'תפקיד למשתמשים חדשים'), role),
+      h('div', { class: 'field wide' }, h('label', { for: 'i_file' }, 'קובץ CSV'), file)),
+    out);
+}
 
 async function renderAdmin() {
-  if (me.role !== 'admin') { location.hash = '#/'; return; }
+  if (!isAdmin()) { location.hash = '#/'; return; }
   view.replaceChildren(h('p', { class: 'muted' }, 'טוען…'));
-  const [{ users, envAdmins }, { records: owners }, { entries }] = await Promise.all([api('/admin/users'), api('/admin/owners'), api('/admin/audit')]);
+  const [{ users, envAdmins, roles }, { groups }] = await Promise.all([api('/admin/users'), api('/admin/groups')]);
+  const groupOptions = (sel) => [h('option', { value: '' }, '— ללא —'), ...groups.map((g) => h('option', { value: g.id, selected: g.id === sel }, g.name))];
+  const roleOptions = (sel) => roles.map((r) => h('option', { value: r.value, selected: r.value === sel }, r.label));
 
   const email = h('input', { type: 'email', placeholder: 'name@gmail.com', required: true, dir: 'ltr', id: 'u_email' });
   const name = h('input', { type: 'text', id: 'u_name' });
-  const role = h('select', { id: 'u_role' }, h('option', { value: 'clinic' }, 'קליניקה / מטפל'), h('option', { value: 'admin' }, 'מנהל (רואה הכל)'));
-  const owner = h('select', { id: 'u_owner' }, h('option', { value: '' }, '— בחירה —'), owners.map((o) => h('option', { value: o.id }, o.name)));
-  role.addEventListener('change', () => { owner.disabled = role.value === 'admin'; });
+  const role = h('select', { id: 'u_role' }, roleOptions('student'));
+  const group = h('select', { id: 'u_group' }, groupOptions(null));
 
-  const add = async (e) => {
-    e.preventDefault();
+  const save = async (body, msg = 'המשתמש נשמר') => {
     try {
-      await api('/admin/users', { method: 'POST', body: { email: email.value, name: name.value, role: role.value, ownerId: owner.value } });
-      toast('המשתמש נשמר');
+      const r = await api('/admin/users', { method: 'POST', body });
+      toast(r.contactError ? `נשמר, אבל לא נוצר איש קשר בסיילספורס: ${r.contactError}` : msg, !!r.contactError);
+    } catch (err) { toast(err.message, true); }
+    renderAdmin();
+  };
+  const add = (e) => { e.preventDefault(); save({ email: email.value, name: name.value, role: role.value, groupId: group.value }); };
+  const remove = async (u) => {
+    if (!confirm(`להסיר את הגישה של ${u.email}? איש הקשר שלו בסיילספורס לא יימחק.`)) return;
+    try { await api(`/admin/users/${encodeURIComponent(u.email)}`, { method: 'DELETE' }); toast('הגישה הוסרה'); renderAdmin(); } catch (err) { toast(err.message, true); }
+  };
+  const relink = async (u) => {
+    try {
+      const r = await api(`/admin/users/${encodeURIComponent(u.email)}/contact`, { method: 'POST' });
+      toast(r.ok ? 'המשתמש קושר לאיש קשר' : r.contactError, !r.ok);
       renderAdmin();
     } catch (err) { toast(err.message, true); }
   };
-  const remove = async (u) => {
-    if (!confirm(`להסיר את הגישה של ${u.email}?`)) return;
-    try { await api(`/admin/users/${encodeURIComponent(u.email)}`, { method: 'DELETE' }); toast('הגישה הוסרה'); renderAdmin(); } catch (err) { toast(err.message, true); }
+
+  const filter = h('select', { 'aria-label': 'סינון לפי קבוצה' }, h('option', { value: '' }, 'כל הקבוצות'), groups.map((g) => h('option', { value: g.id }, g.name)));
+  const tbody = h('tbody');
+  const fill = () => {
+    const shown = users.filter((u) => !filter.value || u.group_id === Number(filter.value));
+    tbody.replaceChildren(
+      ...envAdmins.filter((e) => !users.some((u) => u.email === e)).map((e) => h('tr', {}, h('td', { dir: 'ltr' }, e), h('td', {}, ''), h('td', {}, 'אדמין (קבוע בהגדרות)'), h('td', {}, ''), h('td', {}, ''), h('td', {}, ''))),
+      ...shown.map((u) => {
+        const envAdmin = envAdmins.includes(u.email);
+        const rs = h('select', { 'aria-label': `תפקיד של ${u.email}`, disabled: envAdmin }, roleOptions(envAdmin ? 'admin' : u.role));
+        const gs = h('select', { 'aria-label': `קבוצה של ${u.email}` }, groupOptions(u.group_id));
+        rs.addEventListener('change', () => save({ email: u.email, role: rs.value, groupId: gs.value }, 'התפקיד עודכן'));
+        gs.addEventListener('change', () => save({ email: u.email, role: u.role, groupId: gs.value }, 'הקבוצה עודכנה'));
+        return h('tr', { class: 'static' },
+          h('td', { dir: 'ltr' }, u.email), h('td', {}, u.name || ''), h('td', {}, rs), h('td', {}, gs),
+          h('td', {}, u.sf_contact_id
+            ? h('span', { class: 'pill received', title: u.sf_contact_id }, 'מקושר')
+            : h('span', {}, h('span', { class: 'pill refused', title: u.contact_error || '' }, 'אין איש קשר'), ' ',
+              h('button', { class: 'button is-small', onclick: () => relink(u) }, 'ניסיון חוזר'))),
+          h('td', {}, h('button', { class: 'button is-small is-danger', onclick: () => remove(u) }, 'הסרה')));
+      }));
   };
+  filter.addEventListener('change', fill);
+  fill();
 
   view.replaceChildren(
     h('h1', {}, 'ניהול משתמשים'),
-    h('p', { class: 'muted' }, 'הכניסה היא עם חשבון Google. רק כתובות שמופיעות כאן יכולות להיכנס. משתמש קליניקה רואה ומעדכן רק בקשות שהבעלים שלהן בסיילספורס הוא הקליניקה שלו.'),
+    h('p', { class: 'muted' }, 'הכניסה היא עם חשבון Google. רק כתובות שמופיעות כאן יכולות להיכנס. סטודנטים ועובדים רואים רק את הלוח של הקבוצה שלהם; מנהלים ואדמינים רואים את כל הלוחות; רק אדמינים מנהלים משתמשים וקבוצות. לכל משתמש נוצר או מקושר איש קשר בסיילספורס (לפי המייל), כדי שאפשר יהיה לבחור בו כמטפל/ת בבקשה.'),
     h('form', { class: 'card', onsubmit: add },
       h('h2', {}, 'הוספה או עדכון'),
       h('div', { class: 'form-grid' },
         h('div', { class: 'field' }, h('label', { for: 'u_email' }, 'מייל Google', h('span', { class: 'req' }, '*')), email),
         h('div', { class: 'field' }, h('label', { for: 'u_name' }, 'שם'), name),
-        h('div', { class: 'field' }, h('label', { for: 'u_role' }, 'הרשאה'), role),
-        h('div', { class: 'field' }, h('label', { for: 'u_owner' }, 'קליניקה (בעלי הבקשות בסיילספורס)'), owner)),
+        h('div', { class: 'field' }, h('label', { for: 'u_role' }, 'תפקיד'), role),
+        h('div', { class: 'field' }, h('label', { for: 'u_group' }, 'קבוצה', h('span', { class: 'req' }, '*')), group)),
       h('div', { style: 'margin-top:14px' }, h('button', { class: 'button is-primary', type: 'submit' }, 'שמירה'))),
+    importCard(groups, renderAdmin),
     h('div', { class: 'card table-wrap' },
-      h('h2', {}, 'משתמשים עם גישה'),
+      h('div', { class: 'card-head' }, h('h2', {}, `משתמשים עם גישה (${users.length})`), h('div', {}, filter)),
       h('table', {},
-        h('thead', {}, h('tr', {}, h('th', {}, 'מייל'), h('th', {}, 'שם'), h('th', {}, 'הרשאה'), h('th', {}, 'קליניקה'), h('th', {}, ''))),
-        h('tbody', {},
-          envAdmins.map((e) => h('tr', {}, h('td', { dir: 'ltr' }, e), h('td', {}, ''), h('td', {}, 'מנהל (קבוע בהגדרות)'), h('td', {}, ''), h('td', {}, ''))),
-          users.map((u) => h('tr', {}, h('td', { dir: 'ltr' }, u.email), h('td', {}, u.name || ''), h('td', {}, u.role === 'admin' ? 'מנהל' : 'קליניקה'),
-            h('td', {}, u.sf_owner_name || ''), h('td', {}, h('button', { class: 'button is-small is-danger', onclick: () => remove(u) }, 'הסרה'))))))),
-    h('div', { class: 'card table-wrap' },
-      h('h2', {}, 'פעילות אחרונה'),
-      entries.length ? h('table', {},
-        h('thead', {}, h('tr', {}, h('th', {}, 'מתי'), h('th', {}, 'מי'), h('th', {}, 'פעולה'), h('th', {}, 'בקשה'))),
-        h('tbody', {}, entries.map((a) => h('tr', { onclick: a.case_id ? () => { location.hash = `#/r/${a.case_id}`; } : null },
-          h('td', { class: 'num' }, fmtDateTime(a.at)), h('td', { dir: 'ltr' }, a.email),
-          h('td', {}, { create: 'יצירת בקשה', update: 'עדכון בקשה', user_upsert: 'עדכון משתמש', user_delete: 'הסרת משתמש' }[a.action] || a.action),
-          h('td', {}, a.case_number || (a.changes?.email ?? '')))))) : h('p', { class: 'muted' }, 'אין עדיין פעילות.')));
+        h('thead', {}, h('tr', {}, h('th', {}, 'מייל'), h('th', {}, 'שם'), h('th', {}, 'תפקיד'), h('th', {}, 'קבוצה'), h('th', {}, 'איש קשר בסיילספורס'), h('th', {}, ''))),
+        tbody)));
+}
+
+// ---------- admin: groups ----------
+
+async function renderGroups() {
+  if (!isAdmin()) { location.hash = '#/'; return; }
+  view.replaceChildren(h('p', { class: 'muted' }, 'טוען…'));
+  const [{ groups }, { records: owners }] = await Promise.all([api('/admin/groups'), api('/admin/owners')]);
+  const clinicOwner = new Map(groups.filter((g) => g.kind === 'clinic').flatMap((g) => g.sf_owner_ids.map((id) => [id, g])));
+
+  const groupForm = (g) => {
+    const isStaff = g?.kind === 'staff';
+    const key = g ? g.id : 'new';
+    const name = h('input', { type: 'text', id: `g_name_${key}`, value: g?.name || '', required: true });
+    const ownerIds = h('select', { id: `g_owners_${key}`, multiple: true, size: 6 },
+      owners.filter((o) => !clinicOwner.has(o.id) || clinicOwner.get(o.id).id === g?.id)
+        .map((o) => h('option', { value: o.id, selected: g?.sf_owner_ids?.includes(o.id) }, o.name)));
+    const defaultOwner = h('select', { id: `g_default_${key}` }, h('option', { value: '' }, isStaff ? '— משתמש ה-API —' : '— הראשון ברשימה —'),
+      owners.filter((o) => (isStaff ? !clinicOwner.has(o.id) : true)).map((o) => h('option', { value: o.id, selected: o.id === g?.default_owner_id }, o.name)));
+    const submit = async (e) => {
+      e.preventDefault();
+      const body = { name: name.value, sf_owner_ids: [...ownerIds.selectedOptions].map((o) => o.value), default_owner_id: defaultOwner.value || null };
+      try {
+        await api(g ? `/admin/groups/${g.id}` : '/admin/groups', { method: g ? 'PATCH' : 'POST', body });
+        toast('הקבוצה נשמרה');
+        boards = (await api('/boards')).boards;
+        renderGroups();
+      } catch (err) { toast(err.message, true); }
+    };
+    return h('form', { class: 'card', onsubmit: submit },
+      h('h2', {}, g ? g.name : 'הוספת קליניקה'),
+      g ? h('p', { class: 'muted' }, `${isStaff ? 'עובדי התנועה: כל בקשה שהבעלים שלה אינו משתמש של קליניקה.' : 'קליניקה: הבקשות שהבעלים שלהן הוא אחד המשתמשים שנבחרו.'} ${g.members} משתמשים בקבוצה.`) : null,
+      h('div', { class: 'form-grid' },
+        h('div', { class: 'field' }, h('label', { for: `g_name_${key}` }, 'שם', h('span', { class: 'req' }, '*')), name),
+        h('div', { class: 'field' }, h('label', { for: `g_default_${key}` }, 'בעלים לבקשות חדשות מהלוח'), defaultOwner,
+          h('span', { class: 'help' }, isStaff ? 'אם ליוצר/ת הבקשה יש משתמש סיילספורס עם אותו מייל, הבקשה תשויך אליו/ה; אחרת לבעלים שנבחר כאן.' : 'חייב להיות אחד המשתמשים של הקליניקה.')),
+        isStaff ? null : h('div', { class: 'field wide' }, h('label', { for: `g_owners_${key}` }, 'משתמשי סיילספורס שהבקשות שלהם שייכות לקליניקה', h('span', { class: 'req' }, '*')), ownerIds,
+          h('span', { class: 'help' }, 'Ctrl / Cmd ללחיצה על כמה משתמשים. משתמש יכול להשתייך לקליניקה אחת בלבד.'))),
+      h('div', { style: 'margin-top:14px' }, h('button', { class: 'button is-primary', type: 'submit' }, g ? 'שמירה' : 'הוספת הקליניקה')));
+  };
+
+  view.replaceChildren(
+    h('h1', {}, 'קבוצות ולוחות'),
+    h('p', { class: 'muted' }, 'לכל קבוצה יש לוח בקשות משלה. בקשה שייכת לקליניקה לפי הבעלים שלה בסיילספורס; כל השאר שייכות לעובדי התנועה.'),
+    ...groups.map((g) => groupForm(g)),
+    groupForm(null));
+}
+
+// ---------- admin: log ----------
+
+const logState = { email: '', case: '', action: '', from: '', to: '', page: 0 };
+
+async function renderLog() {
+  if (!isAdmin()) { location.hash = '#/'; return; }
+  const email = h('select', { id: 'l_email' }, h('option', { value: '' }, 'כל המשתמשים'));
+  const action = h('select', { id: 'l_action' }, h('option', { value: '' }, 'כל הפעולות'));
+  const caseNo = h('input', { type: 'text', id: 'l_case', inputmode: 'numeric', value: logState.case, placeholder: 'למשל 12345' });
+  const from = h('input', { type: 'date', id: 'l_from', value: logState.from });
+  const to = h('input', { type: 'date', id: 'l_to', value: logState.to });
+  const body = h('div', {}, h('p', { class: 'muted' }, 'טוען…'));
+  let facetsFilled = false;
+
+  const load = async () => {
+    body.replaceChildren(h('p', { class: 'muted' }, 'טוען…'));
+    const params = new URLSearchParams(Object.entries(logState).filter(([, v]) => v !== ''));
+    try {
+      const data = await api(`/admin/audit?${params}`);
+      if (!facetsFilled) {
+        email.append(...data.emails.map((e) => h('option', { value: e }, e)));
+        action.append(...data.actions.map((a) => h('option', { value: a }, ACTIONS[a] || a)));
+        email.value = logState.email; action.value = logState.action;
+        facetsFilled = true;
+      }
+      if (!data.entries.length) return body.replaceChildren(h('p', { class: 'notice' }, 'אין רשומות שמתאימות לסינון.'));
+      const pages = Math.max(1, Math.ceil(data.total / data.pageSize));
+      body.replaceChildren(
+        h('p', { class: 'muted' }, `${data.total} רשומות`),
+        h('div', { class: 'card table-wrap', style: 'padding:0' }, h('table', { class: 'log' },
+          h('thead', {}, h('tr', {}, h('th', {}, 'מתי'), h('th', {}, 'מי'), h('th', {}, 'פעולה'), h('th', {}, 'בקשה / יעד'), h('th', { class: 'hide-sm' }, 'קבוצה'), h('th', {}, 'פירוט'))),
+          h('tbody', {}, data.entries.map((a) => h('tr', { class: 'static' },
+            h('td', { class: 'num' }, fmtDateTime(a.at)),
+            h('td', { dir: 'ltr' }, a.email),
+            h('td', {}, ACTIONS[a.action] || a.action),
+            h('td', {}, a.case_id ? h('a', { href: `#/r/${a.case_id}` }, a.case_number || a.case_id) : h('span', { dir: 'auto' }, a.target || a.changes?.email || '')),
+            h('td', { class: 'hide-sm' }, a.group_name || ''),
+            h('td', {}, changeList(a))))))),
+        h('div', { class: 'pager' },
+          h('button', { class: 'button is-small', disabled: logState.page === 0, onclick: () => { logState.page--; load(); } }, '→ הקודם'),
+          h('span', { class: 'muted' }, `עמוד ${logState.page + 1} מתוך ${pages}`),
+          h('button', { class: 'button is-small', disabled: logState.page + 1 >= pages, onclick: () => { logState.page++; load(); } }, 'הבא ←')));
+    } catch (e) { body.replaceChildren(h('p', { class: 'notice error' }, e.message)); }
+  };
+
+  const apply = () => {
+    Object.assign(logState, { email: email.value, action: action.value, case: caseNo.value.replace(/\D/g, ''), from: from.value, to: to.value, page: 0 });
+    load();
+  };
+  for (const el of [email, action, from, to]) el.addEventListener('change', apply);
+  let timer;
+  caseNo.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(apply, 400); });
+  const reset = h('button', { class: 'button is-small', type: 'button', onclick: () => {
+    Object.assign(logState, { email: '', case: '', action: '', from: '', to: '', page: 0 });
+    email.value = ''; action.value = ''; caseNo.value = ''; from.value = ''; to.value = '';
+    load();
+  } }, 'ניקוי סינון');
+
+  view.replaceChildren(
+    h('h1', {}, 'יומן פעולות'),
+    h('p', { class: 'muted' }, 'כל פעולה שנעשתה דרך הפורטל: יצירה ועדכון של בקשות (שדה אחרי שדה, מה היה ומה נהיה), ניהול משתמשים וקבוצות וייבוא.'),
+    h('div', { class: 'card filters' },
+      h('div', { class: 'field' }, h('label', { for: 'l_email' }, 'משתמש'), email),
+      h('div', { class: 'field' }, h('label', { for: 'l_case' }, 'מספר בקשה'), caseNo),
+      h('div', { class: 'field' }, h('label', { for: 'l_action' }, 'פעולה'), action),
+      h('div', { class: 'field' }, h('label', { for: 'l_from' }, 'מתאריך'), from),
+      h('div', { class: 'field' }, h('label', { for: 'l_to' }, 'עד תאריך'), to),
+      h('div', { class: 'field reset' }, reset)),
+    body);
+  load();
 }
 
 // ---------- boot ----------
@@ -359,10 +630,15 @@ async function route() {
   setActiveNav(hash);
   window.scrollTo(0, 0);
   try {
+    let m;
     if (hash.startsWith('#/r/')) return await renderRecord(hash.slice(4));
-    if (hash === '#/new') return await renderNew();
+    if ((m = hash.match(/^#\/b\/(\d+)\/new$/))) return await renderNew(Number(m[1]));
+    if ((m = hash.match(/^#\/b\/(\d+)$/))) return await renderList(Number(m[1]));
+    if (hash === '#/new') return await renderNew(null);
     if (hash === '#/admin') return await renderAdmin();
-    return await renderList();
+    if (hash === '#/admin/groups') return await renderGroups();
+    if (hash === '#/admin/log') return await renderLog();
+    return await renderList(null);
   } catch (e) {
     if (e.message !== 'redirect') view.replaceChildren(h('p', { class: 'notice error' }, e.message));
   }
@@ -380,10 +656,13 @@ async function boot() {
     } else if (e.message !== 'redirect') view.replaceChildren(h('p', { class: 'notice error' }, e.message));
     return;
   }
-  document.getElementById('who').replaceChildren(h('span', {}, `${me.name || me.email} · `), h('a', { href: '/xhost-auth/logout?return_to=/' }, 'התנתקות'));
+  const who = [me.name || me.email, me.roleLabel, me.seesAll ? null : me.group?.name].filter(Boolean).join(' · ');
+  document.getElementById('who').replaceChildren(h('span', {}, `${who} · `), h('a', { href: '/xhost-auth/logout?return_to=/' }, 'התנתקות'));
   document.getElementById('nav').hidden = false;
-  if (me.role === 'admin') document.querySelector('[data-admin]').hidden = false;
-  try { meta = await api('/meta'); } catch (e) { return view.replaceChildren(h('p', { class: 'notice error' }, `לא ניתן לטעון את הגדרות סיילספורס: ${e.message}`)); }
+  if (isAdmin()) for (const a of document.querySelectorAll('[data-admin]')) a.hidden = false;
+  try {
+    [meta, { boards }] = await Promise.all([api('/meta'), api('/boards')]);
+  } catch (e) { return view.replaceChildren(h('p', { class: 'notice error' }, `לא ניתן לטעון את הגדרות סיילספורס: ${e.message}`)); }
   window.addEventListener('hashchange', route);
   route();
 }
