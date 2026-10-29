@@ -4,11 +4,13 @@ import { getMeta } from './meta.js';
 import { EDITABLE_FIELDS, REQUEST_RECORD_TYPE, LOOKUPS, HANDLER_FIELD } from './fields.js';
 import { requireUser, requireAdmin, sameOrigin, adminEmails } from './auth.js';
 import {
+  searchAccess, accessSummary,
   audit, auditFor, searchAudit, listUsers, findUser, upsertUser, deleteUser, usersByContact,
   listGroups, saveGroup, ROLES,
 } from './db.js';
-import { canSeeAll, caseFilter, visibleGroups, groupOfOwner, ensureContacts, sfUserByEmail } from './access.js';
+import { canSeeAll, caseFilter, visibleGroups, groupOfOwner, ensureContacts } from './access.js';
 import { parsePeople, isEmail } from './csv.js';
+import { rememberCase, RETENTION_DAYS } from './accesslog.js';
 
 export const api = express.Router();
 api.use(express.json({ limit: '2mb' }));
@@ -38,6 +40,7 @@ export async function loadCase(user, id) {
   if (!isId(id)) return null;
   const fields = ['Id', 'CaseNumber', 'OwnerId', 'Owner.Name', 'CreatedDate', 'LastModifiedDate', 'ClosedDate', ...EDITABLE_FIELDS, ...LOOKUP_NAMES];
   const r = await query(`SELECT ${[...new Set(fields)].join(', ')} FROM Case WHERE Id = '${id}' AND ${await scope(user)} LIMIT 1`);
+  if (r.records[0]) rememberCase(r.records[0].Id, r.records[0].CaseNumber);
   return r.records[0] || null;
 }
 
@@ -142,10 +145,13 @@ api.get('/meta', wrap(async (req, res) => {
   res.json(await getMeta());
 }));
 
-// The boards (groups) this user may open, with who new requests on each board are assigned to.
+// The boards (groups) this user may open, with who new requests this user creates there are owned by
+// (null on the staff board when the user has no Salesforce user mapped yet).
 api.get('/boards', wrap(async (req, res) => {
   const groups = await visibleGroups(req.user);
-  res.json({ boards: groups.map((g) => ({ ...groupInfo(g), newOwnerName: g.default_owner_name || null })) });
+  res.json({
+    boards: groups.map((g) => ({ ...groupInfo(g), newOwnerName: g.kind === 'staff' ? req.user.sfUserName : g.default_owner_name || null })),
+  });
 }));
 
 api.get('/requests', wrap(async (req, res) => {
@@ -201,9 +207,9 @@ api.patch('/requests/:id', wrap(async (req, res) => {
   res.json({ ok: true, changed: Object.keys(changes).length });
 }));
 
-// Who owns a new request on this board: the clinic's Salesforce user; on the staff board the
-// creator's own Salesforce user (matched by email), else the board's default owner, else the API user.
-async function newCaseOwner(user, board, groups) {
+// Who owns a new request on this board: on a clinic board the clinic's Salesforce user (every
+// member creates under it); on the staff board the creator's own Salesforce user, mapped in #/admin.
+function newCaseOwner(user, board, groups) {
   if (board.kind === 'clinic') {
     const ids = board.sf_owner_ids || [];
     const id = ids.includes(board.default_owner_id) ? board.default_owner_id : ids[0];
@@ -211,9 +217,10 @@ async function newCaseOwner(user, board, groups) {
     return id;
   }
   const clinicOwners = new Set(groups.filter((g) => g.kind === 'clinic').flatMap((g) => g.sf_owner_ids || []));
-  const own = await sfUserByEmail(user.email);
-  if (own && !clinicOwners.has(own.Id)) return own.Id;
-  return isId(board.default_owner_id) && !clinicOwners.has(board.default_owner_id) ? board.default_owner_id : null;
+  if (!isId(user.sfUserId) || clinicOwners.has(user.sfUserId)) {
+    throw bad('לא שויך לך משתמש סיילספורס, ולכן אי אפשר לפתוח בקשה בלוח עובדי התנועה. יש לפנות לאדמין המערכת כדי שישייך אותך למשתמש שלך בסיילספורס.');
+  }
+  return user.sfUserId;
 }
 
 api.post('/requests', wrap(async (req, res) => {
@@ -226,9 +233,9 @@ api.post('/requests', wrap(async (req, res) => {
   const missing = Object.values(meta.fields).filter((f) => f.required && (out[f.name] ?? null) === null).map((f) => f.label);
   if (missing.length) errors.unshift(`שדות חובה: ${missing.join(', ')}`);
   if (errors.length) return res.status(400).json({ error: errors.join('; ') });
+  const ownerId = newCaseOwner(req.user, board, groups);
   const handlerError = await checkHandler(req.user, out[HANDLER_FIELD], board);
   if (handlerError) return res.status(400).json({ error: handlerError });
-  const ownerId = await newCaseOwner(req.user, board, groups);
   const body = { ...out, RecordTypeId: meta.recordTypeId, ...(ownerId ? { OwnerId: ownerId } : {}) };
   const created = await sf('/sobjects/Case', { method: 'POST', body });
   const r = await query(`SELECT CaseNumber, Owner.Name FROM Case WHERE Id = '${created.id}'`);
@@ -302,12 +309,12 @@ async function writeGroup(req, res, current) {
   if (groups.some((g) => g.name === name && g.id !== current?.id)) throw bad('כבר יש קבוצה בשם הזה');
   const kind = current?.kind || 'clinic';
   const ownerIds = kind === 'clinic' ? [...new Set((req.body?.sf_owner_ids || []).filter(isId))] : [];
-  const defaultOwnerId = isId(req.body?.default_owner_id) ? req.body.default_owner_id : null;
+  // The staff board has no default owner: each staff user creates under their own Salesforce user.
+  const defaultOwnerId = kind === 'clinic' && isId(req.body?.default_owner_id) ? req.body.default_owner_id : null;
   if (kind === 'clinic' && !ownerIds.length) throw bad('יש לבחור לפחות משתמש סיילספורס אחד שהבקשות שלו שייכות לקליניקה');
   const otherClinicOwners = new Set(groups.filter((g) => g.kind === 'clinic' && g.id !== current?.id).flatMap((g) => g.sf_owner_ids || []));
   if (ownerIds.some((id) => otherClinicOwners.has(id))) throw bad('משתמש סיילספורס יכול להשתייך לקליניקה אחת בלבד');
-  if (kind === 'staff' && defaultOwnerId && groups.some((g) => g.kind === 'clinic' && g.sf_owner_ids.includes(defaultOwnerId))) throw bad('בעלים ברירת מחדל של לוח העובדים לא יכול להיות משתמש של קליניקה');
-  const effectiveDefault = kind === 'clinic' ? (ownerIds.includes(defaultOwnerId) ? defaultOwnerId : ownerIds[0]) : defaultOwnerId;
+  const effectiveDefault = kind === 'clinic' ? (ownerIds.includes(defaultOwnerId) ? defaultOwnerId : ownerIds[0]) : null;
   const names = await sfUserNames([...new Set([...ownerIds, effectiveDefault].filter(Boolean))]);
   const missing = [...ownerIds, effectiveDefault].filter((id) => id && !names.has(id));
   if (missing.length) throw bad('משתמש סיילספורס לא נמצא');
@@ -351,6 +358,7 @@ const userDiff = (before, after, groups) => {
   diff('role', 'תפקיד', ROLE_LABELS[before?.role], ROLE_LABELS[after.role]);
   diff('group', 'קבוצה', gname(before?.group_id), gname(after.group_id));
   diff('sf_contact_id', 'איש קשר בסיילספורס', before?.sf_contact_id, after.sf_contact_id);
+  diff('sf_user', 'משתמש סיילספורס (בעלים של בקשות חדשות)', before?.sf_user_name, after.sf_user_name);
   return changes;
 };
 
@@ -378,6 +386,8 @@ async function saveUsers(actor, people, groups) {
       group_id: p.group_id ?? before?.group_id ?? null,
       sf_contact_id: c?.id || before?.sf_contact_id || null,
       contact_error: c?.error || (c?.id || before?.sf_contact_id ? null : before?.contact_error) || null,
+      sf_user_id: p.sf_user_id !== undefined ? p.sf_user_id : before?.sf_user_id ?? null,
+      sf_user_name: p.sf_user_id !== undefined ? p.sf_user_name : before?.sf_user_name ?? null,
       created_by: before?.created_by || actor,
     };
     await upsertUser(row);
@@ -396,7 +406,22 @@ api.post('/admin/users', requireAdmin, wrap(async (req, res) => {
   const groupId = parseInt(req.body?.groupId, 10);
   if (!groups.some((g) => g.id === groupId)) throw bad('יש לבחור קבוצה');
   const name = req.body?.name === undefined ? before?.name : String(req.body.name).replace(/\s+/g, ' ').trim().slice(0, 100) || null;
-  const [r] = await saveUsers(req.user.email, [{ email, name, role, group_id: groupId }], groups);
+  const group = groups.find((g) => g.id === groupId);
+  const person = { email, name, role, group_id: groupId };
+  // Staff users are mapped to their own Salesforce user; clinic users create under the clinic's.
+  if (group.kind !== 'staff') {
+    if (before?.sf_user_id) Object.assign(person, { sf_user_id: null, sf_user_name: null });
+  } else if (req.body?.sfUserId !== undefined) {
+    const id = req.body.sfUserId || null;
+    if (id) {
+      if (!isId(id)) throw bad('משתמש סיילספורס לא תקין');
+      if (groups.some((g) => g.kind === 'clinic' && (g.sf_owner_ids || []).includes(id))) throw bad('זה משתמש הסיילספורס של קליניקה; לעובד/ת התנועה יש לבחור את המשתמש האישי שלו/ה');
+      const r = await query(`SELECT Id, Name FROM User WHERE Id = '${id}' AND IsActive = true AND UserType = 'Standard'`);
+      if (!r.records[0]) throw bad('משתמש הסיילספורס לא נמצא או אינו פעיל');
+      Object.assign(person, { sf_user_id: id, sf_user_name: r.records[0].Name });
+    } else Object.assign(person, { sf_user_id: null, sf_user_name: null });
+  }
+  const [r] = await saveUsers(req.user.email, [person], groups);
   if (Object.keys(r.changes).length) {
     await audit({ email: req.user.email, action: before ? 'user_update' : 'user_create', target: email, group_name: groups.find((g) => g.id === groupId)?.name, changes: r.changes });
   }
@@ -459,6 +484,7 @@ api.post('/admin/import', requireAdmin, wrap(async (req, res) => {
   const todo = rows.filter((r) => r.status === 'new' || r.status === 'update');
   const results = await saveUsers(req.user.email, todo.map((r) => ({
     email: r.email, name: r.name, group_id: group.id, ...(r.status === 'new' ? { role } : {}),
+    ...(group.kind !== 'staff' ? { sf_user_id: null, sf_user_name: null } : {}),
   })), groups);
   const contactErrors = results.filter((r) => r.after.contact_error).map((r) => ({ email: r.after.email, error: r.after.contact_error }));
   const summary = {
@@ -487,4 +513,68 @@ api.get('/admin/audit', requireAdmin, wrap(async (req, res) => {
     pageSize: 50,
   });
   res.json({ ...result, page, pageSize: 50 });
+}));
+
+// ---- admin: access log (who signed in, when, and what they opened or did) ----
+
+const ACCESS_KINDS = ['session', 'read', 'write', 'denied', 'error'];
+
+function accessFilters(q) {
+  const date = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(v || '') ? v : null);
+  return {
+    email: String(q.email || '').trim().toLowerCase() || null,
+    kind: ACCESS_KINDS.includes(q.kind) ? q.kind : null,
+    caseNumber: /^\d{1,12}$/.test(q.case || '') ? q.case : null,
+    from: date(q.from),
+    to: date(q.to),
+    denied: q.denied === '1',
+  };
+}
+
+// One row per person: portal users (even if never seen) plus anyone who appears in the log,
+// such as Google accounts that were refused.
+api.get('/admin/access/summary', requireAdmin, wrap(async (req, res) => {
+  const f = accessFilters(req.query);
+  const [stats, users, groups] = await Promise.all([accessSummary(f), listUsers(), listGroups()]);
+  const byEmail = new Map(stats.map((s) => [s.email, s]));
+  const known = new Map(users.map((u) => [u.email, u]));
+  for (const e of adminEmails) if (!known.has(e)) known.set(e, { email: e, role: 'admin' });
+  const rows = [...new Set([...known.keys(), ...byEmail.keys()])].filter(Boolean).map((email) => {
+    const u = known.get(email);
+    const s = byEmail.get(email) || {};
+    return {
+      email, name: u?.name || null,
+      role: adminEmails.has(email) ? ROLE_LABELS.admin : u ? ROLE_LABELS[u.role] : null,
+      group: groups.find((g) => g.id === u?.group_id)?.name || null,
+      portalUser: !!u,
+      last_seen: s.last_seen || null, sessions: s.sessions || 0, actions: s.actions || 0, denied: s.denied || 0,
+    };
+  });
+  rows.sort((a, b) => (+new Date(b.last_seen || 0)) - (+new Date(a.last_seen || 0)) || a.email.localeCompare(b.email));
+  res.json({ users: rows, retentionDays: RETENTION_DAYS });
+}));
+
+api.get('/admin/access', requireAdmin, wrap(async (req, res) => {
+  const page = Math.max(0, parseInt(req.query.page, 10) || 0);
+  const result = await searchAccess(accessFilters(req.query), { page, pageSize: 50 });
+  res.json({ ...result, page, pageSize: 50 });
+}));
+
+// CSV of the filtered timeline (UTF-8 with BOM so Excel shows Hebrew), at most 50,000 rows.
+const csvCell = (v) => {
+  let s = v === null || v === undefined ? '' : v instanceof Date ? v.toISOString() : String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`; // keep spreadsheet formulas from running
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+
+api.get('/admin/access.csv', requireAdmin, wrap(async (req, res) => {
+  const { entries } = await searchAccess(accessFilters(req.query), { page: 0, pageSize: 50000 });
+  const cols = ['at', 'email', 'kind', 'action', 'method', 'route', 'status', 'reason', 'case_number', 'case_id', 'target', 'ip', 'user_agent', 'session_id'];
+  const lines = [cols.join(','), ...entries.map((e) => cols.map((c) => csvCell(e[c])).join(','))];
+  res.set({
+    'Content-Type': 'text/csv; charset=utf-8',
+    'Content-Disposition': `attachment; filename="access-log-${new Date().toISOString().slice(0, 10)}.csv"`,
+    'Cache-Control': 'no-store',
+  });
+  res.send(`\uFEFF${lines.join('\r\n')}\r\n`);
 }));
