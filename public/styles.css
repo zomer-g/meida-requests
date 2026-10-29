@@ -134,6 +134,8 @@ details.section[open] > summary { margin-bottom: 14px; }
 .card-head select { width: auto; }
 tbody tr.static { cursor: default; }
 td select { min-width: 130px; }
+.sf-user { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.sf-user select { width: auto; }
 tr.bad td { background: #fff6f8; }
 table.plain tbody tr { cursor: default; }
 

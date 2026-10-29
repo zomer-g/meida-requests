@@ -77,17 +77,26 @@ export async function migrate() {
         );
       }
     }
-    // One-time move from the old model (role admin/clinic + sf_owner_id) to group + role.
-    // Runs only while group_id does not exist yet, so later role changes are never undone.
+    // One-time move from the old model (role admin/clinic + sf_owner_id) to group + role. It runs
+    // only while group_id does not exist yet, so a second run, or role changes made later, are
+    // never touched. No row or column is dropped; sf_owner_id / sf_owner_name stay as they were.
+    //   clinic, owner is a clinic's Salesforce user -> student in that clinic
+    //   clinic, owner is anyone else (a staff member) -> employee in the staff group, mapped to that Salesforce user
+    //   admin -> manager in the staff group (ADMIN_EMAILS stay admins regardless of the row)
     await client.query(`
+      ALTER TABLE portal_users ADD COLUMN IF NOT EXISTS sf_user_id text;
+      ALTER TABLE portal_users ADD COLUMN IF NOT EXISTS sf_user_name text;
       DO $$ BEGIN
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'portal_users' AND column_name = 'group_id') THEN
           ALTER TABLE portal_users ADD COLUMN group_id int REFERENCES portal_groups(id);
           ALTER TABLE portal_users DROP CONSTRAINT IF EXISTS portal_users_role_check;
-          UPDATE portal_users u SET group_id = g.id FROM portal_groups g
-            WHERE g.kind = 'clinic' AND u.sf_owner_id = ANY (g.sf_owner_ids);
-          UPDATE portal_users SET group_id = (SELECT id FROM portal_groups WHERE kind = 'staff') WHERE group_id IS NULL;
-          UPDATE portal_users SET role = CASE role WHEN 'clinic' THEN 'employee' ELSE 'manager' END;
+          UPDATE portal_users u SET group_id = g.id, role = 'student' FROM portal_groups g
+            WHERE u.role = 'clinic' AND g.kind = 'clinic' AND u.sf_owner_id = ANY (g.sf_owner_ids);
+          UPDATE portal_users SET group_id = (SELECT id FROM portal_groups WHERE kind = 'staff'), role = 'employee',
+            sf_user_id = sf_owner_id, sf_user_name = sf_owner_name
+            WHERE role = 'clinic';
+          UPDATE portal_users SET group_id = (SELECT id FROM portal_groups WHERE kind = 'staff'), role = 'manager'
+            WHERE role = 'admin';
         END IF;
       END $$;
       ALTER TABLE portal_users ADD COLUMN IF NOT EXISTS sf_contact_id text;
@@ -172,10 +181,11 @@ export async function upsertUser(u) {
     return mem.users.set(u.email, { created_at: new Date(), ...cur, ...u, updated_at: cur ? new Date() : null });
   }
   await pool.query(
-    `INSERT INTO portal_users (email, name, role, group_id, sf_contact_id, contact_error, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     ON CONFLICT (email) DO UPDATE SET name = $2, role = $3, group_id = $4, sf_contact_id = $5, contact_error = $6, updated_at = now()`,
-    [u.email, u.name, u.role, u.group_id, u.sf_contact_id || null, u.contact_error || null, u.created_by],
+    `INSERT INTO portal_users (email, name, role, group_id, sf_contact_id, contact_error, sf_user_id, sf_user_name, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     ON CONFLICT (email) DO UPDATE SET name = $2, role = $3, group_id = $4, sf_contact_id = $5, contact_error = $6,
+       sf_user_id = $7, sf_user_name = $8, updated_at = now()`,
+    [u.email, u.name, u.role, u.group_id, u.sf_contact_id || null, u.contact_error || null, u.sf_user_id || null, u.sf_user_name || null, u.created_by],
   );
 }
 

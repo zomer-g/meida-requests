@@ -40,7 +40,7 @@ async function identity(req) {
   }
 }
 
-// Resolves req.user = { email, name, role, groupId, contactId } or answers 401/403.
+// Resolves req.user = { email, name, role, groupId, contactId, sfUserId, sfUserName } or answers 401/403.
 // ADMIN_EMAILS are always admins; their portal_users row (if any) only adds a group and Contact.
 export async function requireUser(req, res, next) {
   const who = await identity(req);
@@ -54,6 +54,8 @@ export async function requireUser(req, res, next) {
     role: isEnvAdmin ? 'admin' : row.role,
     groupId: row?.group_id ?? null,
     contactId: row?.sf_contact_id ?? null,
+    sfUserId: row?.sf_user_id ?? null, // owner of the staff-board requests this user creates
+    sfUserName: row?.sf_user_name ?? null,
   };
   next();
 }

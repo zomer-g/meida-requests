@@ -9,8 +9,9 @@ and view, create and update FOI requests (Salesforce Cases, record type `בקש�
 - Groups and boards (`portal_groups`, `server/access.js`): each group has its own requests board. A clinic's board is
   the Cases owned by its Salesforce user(s); the single staff group ("עובדי התנועה") gets every Case whose owner is
   not a clinic owner. Admins add clinics at `#/admin/groups` without code changes.
-- New requests are owned by the board's Salesforce user: a clinic's user; on the staff board the creator's own
-  Salesforce user (same email) if there is one, else the board's default owner chosen in `#/admin/groups`, else the API user.
+- New requests are owned by the board's Salesforce user: on a clinic board the clinic's user (all clinic members
+  create under it); on the staff board the creator's own Salesforce user (`portal_users.sf_user_id`, mapped per staff
+  user at `#/admin`, with a suggestion by email or name). A staff user with no mapping cannot create requests.
 - Roles (`portal_users.role`): `student` and `employee` see only their own group's board, enforced in every Case query,
   update, create and lookup (`scope()` / `loadCase()` in `routes.js`); `manager` and `admin` see all boards; only
   `admin` manages users, groups, imports and the log. `ADMIN_EMAILS` (env) are always admins.

@@ -357,7 +357,8 @@ async function renderNew(boardId) {
   const describeOwner = () => {
     if (!board) return ownerNote.replaceChildren('בחרו לוח. הבקשה תשויך לבעלים של הלוח שנבחר.');
     if (board.kind === 'clinic') return ownerNote.replaceChildren(`הבקשה תשויך ל${board.newOwnerName || board.name} בסיילספורס.`);
-    return ownerNote.replaceChildren(`הבקשה תשויך למשתמש הסיילספורס שלך אם יש כזה, ואחרת ל${board.newOwnerName || 'משתמש ה-API'}.`);
+    if (board.newOwnerName) return ownerNote.replaceChildren(`הבקשה תשויך למשתמש הסיילספורס שלך: ${board.newOwnerName}.`);
+    return ownerNote.replaceChildren(h('span', { class: 'notice error', style: 'display:block' }, 'לא שויך לך משתמש סיילספורס, ולכן אי אפשר לפתוח בקשה בלוח עובדי התנועה. יש לפנות לאדמין המערכת.'));
   };
   describeOwner();
   boardSelect?.addEventListener('change', () => { board = boardById(Number(boardSelect.value)); ctx.groupId = board?.id ?? null; describeOwner(); });
@@ -438,7 +439,15 @@ function importCard(groups, onDone) {
 async function renderAdmin() {
   if (!isAdmin()) { location.hash = '#/'; return; }
   view.replaceChildren(h('p', { class: 'muted' }, 'טוען…'));
-  const [{ users, envAdmins, roles }, { groups }] = await Promise.all([api('/admin/users'), api('/admin/groups')]);
+  const [{ users, envAdmins, roles }, { groups }, { records: owners }] = await Promise.all([api('/admin/users'), api('/admin/groups'), api('/admin/owners')]);
+  const isStaffGroup = (id) => groups.find((g) => g.id === Number(id))?.kind === 'staff';
+  // Staff users are mapped to their own Salesforce user (clinic users create under the clinic's).
+  const clinicOwnerIds = new Set(groups.filter((g) => g.kind === 'clinic').flatMap((g) => g.sf_owner_ids));
+  const staffOwners = owners.filter((o) => !clinicOwnerIds.has(o.id));
+  const norm = (v) => String(v || '').replace(/["'׳״`]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const suggestOwner = (mail, fullName) => staffOwners.find((o) => mail && norm(o.email) === norm(mail))
+    || staffOwners.find((o) => fullName && norm(o.name) === norm(fullName)) || null;
+  const ownerOptions = (sel) => [h('option', { value: '' }, '— לא שויך —'), ...staffOwners.map((o) => h('option', { value: o.id, selected: o.id === sel }, o.name))];
   const groupOptions = (sel) => [h('option', { value: '' }, '— ללא —'), ...groups.map((g) => h('option', { value: g.id, selected: g.id === sel }, g.name))];
   const roleOptions = (sel) => roles.map((r) => h('option', { value: r.value, selected: r.value === sel }, r.label));
 
@@ -446,6 +455,19 @@ async function renderAdmin() {
   const name = h('input', { type: 'text', id: 'u_name' });
   const role = h('select', { id: 'u_role' }, roleOptions('student'));
   const group = h('select', { id: 'u_group' }, groupOptions(null));
+  const sfUser = h('select', { id: 'u_sfuser', disabled: true }, ownerOptions(null));
+  const sfHint = h('span', { class: 'help' }, 'רק לעובדי התנועה: בקשות שהם פותחים יהיו בבעלות המשתמש הזה בסיילספורס.');
+  const refreshSfUser = () => {
+    sfUser.disabled = !isStaffGroup(group.value);
+    if (sfUser.disabled) { sfUser.value = ''; return; }
+    const s = suggestOwner(email.value.trim(), name.value);
+    if (s && !sfUser.dataset.touched) {
+      sfUser.value = s.id;
+      sfHint.textContent = `הוצע לפי ${norm(s.email) === norm(email.value) ? 'המייל' : 'השם'}: ${s.name}. אפשר לשנות.`;
+    }
+  };
+  for (const el of [email, name, group]) el.addEventListener('change', refreshSfUser);
+  sfUser.addEventListener('change', () => { sfUser.dataset.touched = '1'; });
 
   const save = async (body, msg = 'המשתמש נשמר') => {
     try {
@@ -454,7 +476,10 @@ async function renderAdmin() {
     } catch (err) { toast(err.message, true); }
     renderAdmin();
   };
-  const add = (e) => { e.preventDefault(); save({ email: email.value, name: name.value, role: role.value, groupId: group.value }); };
+  const add = (e) => {
+    e.preventDefault();
+    save({ email: email.value, name: name.value, role: role.value, groupId: group.value, ...(isStaffGroup(group.value) ? { sfUserId: sfUser.value || null } : {}) });
+  };
   const remove = async (u) => {
     if (!confirm(`להסיר את הגישה של ${u.email}? איש הקשר שלו בסיילספורס לא יימחק.`)) return;
     try { await api(`/admin/users/${encodeURIComponent(u.email)}`, { method: 'DELETE' }); toast('הגישה הוסרה'); renderAdmin(); } catch (err) { toast(err.message, true); }
@@ -472,15 +497,24 @@ async function renderAdmin() {
   const fill = () => {
     const shown = users.filter((u) => !filter.value || u.group_id === Number(filter.value));
     tbody.replaceChildren(
-      ...envAdmins.filter((e) => !users.some((u) => u.email === e)).map((e) => h('tr', {}, h('td', { dir: 'ltr' }, e), h('td', {}, ''), h('td', {}, 'אדמין (קבוע בהגדרות)'), h('td', {}, ''), h('td', {}, ''), h('td', {}, ''))),
+      ...envAdmins.filter((e) => !users.some((u) => u.email === e)).map((e) => h('tr', {}, h('td', { dir: 'ltr' }, e), h('td', {}, ''), h('td', {}, 'אדמין (קבוע בהגדרות)'), h('td', {}, ''), h('td', {}, ''), h('td', {}, ''), h('td', {}, ''))),
       ...shown.map((u) => {
         const envAdmin = envAdmins.includes(u.email);
         const rs = h('select', { 'aria-label': `תפקיד של ${u.email}`, disabled: envAdmin }, roleOptions(envAdmin ? 'admin' : u.role));
         const gs = h('select', { 'aria-label': `קבוצה של ${u.email}` }, groupOptions(u.group_id));
         rs.addEventListener('change', () => save({ email: u.email, role: rs.value, groupId: gs.value }, 'התפקיד עודכן'));
         gs.addEventListener('change', () => save({ email: u.email, role: u.role, groupId: gs.value }, 'הקבוצה עודכנה'));
+        let sfCell = h('span', { class: 'muted' }, 'משתמש הקליניקה');
+        if (isStaffGroup(u.group_id)) {
+          const us = h('select', { 'aria-label': `משתמש סיילספורס של ${u.email}` }, ownerOptions(u.sf_user_id));
+          us.addEventListener('change', () => save({ email: u.email, role: u.role, groupId: u.group_id, sfUserId: us.value || null }, 'משתמש הסיילספורס עודכן'));
+          const s = !u.sf_user_id && suggestOwner(u.email, u.name);
+          sfCell = h('div', { class: 'sf-user' }, us,
+            u.sf_user_id ? null : h('span', { class: 'pill refused' }, 'לא שויך'),
+            s ? h('button', { class: 'button is-small', type: 'button', onclick: () => save({ email: u.email, role: u.role, groupId: u.group_id, sfUserId: s.id }, `שויך ל${s.name}`) }, `שיוך ל${s.name} (הצעה)`) : null);
+        }
         return h('tr', { class: 'static' },
-          h('td', { dir: 'ltr' }, u.email), h('td', {}, u.name || ''), h('td', {}, rs), h('td', {}, gs),
+          h('td', { dir: 'ltr' }, u.email), h('td', {}, u.name || ''), h('td', {}, rs), h('td', {}, gs), h('td', {}, sfCell),
           h('td', {}, u.sf_contact_id
             ? h('span', { class: 'pill received', title: u.sf_contact_id }, 'מקושר')
             : h('span', {}, h('span', { class: 'pill refused', title: u.contact_error || '' }, 'אין איש קשר'), ' ',
@@ -500,13 +534,14 @@ async function renderAdmin() {
         h('div', { class: 'field' }, h('label', { for: 'u_email' }, 'מייל Google', h('span', { class: 'req' }, '*')), email),
         h('div', { class: 'field' }, h('label', { for: 'u_name' }, 'שם'), name),
         h('div', { class: 'field' }, h('label', { for: 'u_role' }, 'תפקיד'), role),
-        h('div', { class: 'field' }, h('label', { for: 'u_group' }, 'קבוצה', h('span', { class: 'req' }, '*')), group)),
+        h('div', { class: 'field' }, h('label', { for: 'u_group' }, 'קבוצה', h('span', { class: 'req' }, '*')), group),
+        h('div', { class: 'field' }, h('label', { for: 'u_sfuser' }, 'משתמש סיילספורס'), sfUser, sfHint)),
       h('div', { style: 'margin-top:14px' }, h('button', { class: 'button is-primary', type: 'submit' }, 'שמירה'))),
     importCard(groups, renderAdmin),
     h('div', { class: 'card table-wrap' },
       h('div', { class: 'card-head' }, h('h2', {}, `משתמשים עם גישה (${users.length})`), h('div', {}, filter)),
       h('table', {},
-        h('thead', {}, h('tr', {}, h('th', {}, 'מייל'), h('th', {}, 'שם'), h('th', {}, 'תפקיד'), h('th', {}, 'קבוצה'), h('th', {}, 'איש קשר בסיילספורס'), h('th', {}, ''))),
+        h('thead', {}, h('tr', {}, h('th', {}, 'מייל'), h('th', {}, 'שם'), h('th', {}, 'תפקיד'), h('th', {}, 'קבוצה'), h('th', {}, 'משתמש סיילספורס'), h('th', {}, 'איש קשר בסיילספורס'), h('th', {}, ''))),
         tbody)));
 }
 
@@ -525,8 +560,8 @@ async function renderGroups() {
     const ownerIds = h('select', { id: `g_owners_${key}`, multiple: true, size: 6 },
       owners.filter((o) => !clinicOwner.has(o.id) || clinicOwner.get(o.id).id === g?.id)
         .map((o) => h('option', { value: o.id, selected: g?.sf_owner_ids?.includes(o.id) }, o.name)));
-    const defaultOwner = h('select', { id: `g_default_${key}` }, h('option', { value: '' }, isStaff ? '— משתמש ה-API —' : '— הראשון ברשימה —'),
-      owners.filter((o) => (isStaff ? !clinicOwner.has(o.id) : true)).map((o) => h('option', { value: o.id, selected: o.id === g?.default_owner_id }, o.name)));
+    const defaultOwner = h('select', { id: `g_default_${key}` }, h('option', { value: '' }, '— הראשון ברשימה —'),
+      owners.map((o) => h('option', { value: o.id, selected: o.id === g?.default_owner_id }, o.name)));
     const submit = async (e) => {
       e.preventDefault();
       const body = { name: name.value, sf_owner_ids: [...ownerIds.selectedOptions].map((o) => o.value), default_owner_id: defaultOwner.value || null };
@@ -542,8 +577,10 @@ async function renderGroups() {
       g ? h('p', { class: 'muted' }, `${isStaff ? 'עובדי התנועה: כל בקשה שהבעלים שלה אינו משתמש של קליניקה.' : 'קליניקה: הבקשות שהבעלים שלהן הוא אחד המשתמשים שנבחרו.'} ${g.members} משתמשים בקבוצה.`) : null,
       h('div', { class: 'form-grid' },
         h('div', { class: 'field' }, h('label', { for: `g_name_${key}` }, 'שם', h('span', { class: 'req' }, '*')), name),
-        h('div', { class: 'field' }, h('label', { for: `g_default_${key}` }, 'בעלים לבקשות חדשות מהלוח'), defaultOwner,
-          h('span', { class: 'help' }, isStaff ? 'אם ליוצר/ת הבקשה יש משתמש סיילספורס עם אותו מייל, הבקשה תשויך אליו/ה; אחרת לבעלים שנבחר כאן.' : 'חייב להיות אחד המשתמשים של הקליניקה.')),
+        isStaff
+          ? h('p', { class: 'help' }, 'בקשה חדשה בלוח הזה תהיה בבעלות משתמש הסיילספורס האישי של מי שפתח/ה אותה (משויך בעמוד המשתמשים).')
+          : h('div', { class: 'field' }, h('label', { for: `g_default_${key}` }, 'בעלים לבקשות חדשות מהלוח'), defaultOwner,
+            h('span', { class: 'help' }, 'כל חברי הקליניקה פותחים בקשות בבעלות המשתמש הזה. חייב להיות אחד המשתמשים של הקליניקה.')),
         isStaff ? null : h('div', { class: 'field wide' }, h('label', { for: `g_owners_${key}` }, 'משתמשי סיילספורס שהבקשות שלהם שייכות לקליניקה', h('span', { class: 'req' }, '*')), ownerIds,
           h('span', { class: 'help' }, 'Ctrl / Cmd ללחיצה על כמה משתמשים. משתמש יכול להשתייך לקליניקה אחת בלבד.'))),
       h('div', { style: 'margin-top:14px' }, h('button', { class: 'button is-primary', type: 'submit' }, g ? 'שמירה' : 'הוספת הקליניקה')));
