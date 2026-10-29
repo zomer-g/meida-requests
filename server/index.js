@@ -23,7 +23,7 @@ app.use((req, res, next) => {
 app.get('/healthz', (req, res) => res.json({ ok: true }));
 app.use('/api', activity); // before `api`: it parses its own multipart bodies
 app.use('/api', api);
-app.use(express.static(root, { index: 'index.html', maxAge: '5m' }));
+app.use(express.static(root, { index: 'index.html', maxAge: '5m', extensions: ['html'] })); // also serves /privacy, /accessibility (public, no sign-in)
 app.get(/^\/(?!api|xhost-auth).*/, (req, res) => res.sendFile(path.join(root, 'index.html')));
 
 const port = Number(process.env.XHOSTD_HTTP_PORT || process.env.XHOST_HTTP_PORT || process.env.PORT || 3000);

@@ -657,7 +657,8 @@ async function boot() {
       view.replaceChildren(h('div', { class: 'card' },
         h('h1', {}, 'אין לך עדיין גישה'),
         h('p', {}, `נכנסת כ-${e.data?.email || ''}. כדי לקבל גישה, צרו קשר עם צוות התנועה לחופש המידע ובקשו שיוסיפו את הכתובת.`),
-        h('a', { class: 'button', href: '/xhost-auth/logout?return_to=/' }, 'התנתקות')));
+        h('a', { class: 'button', href: '/xhost-auth/logout?return_to=/' }, 'התנתקות'),
+        h('p', {}, h('a', { href: '/privacy' }, 'מדיניות הפרטיות'), ' · ', h('a', { href: '/accessibility' }, 'הצהרת הנגישות'))));
     } else if (e.message !== 'redirect') view.replaceChildren(h('p', { class: 'notice error' }, e.message));
     return;
   }
