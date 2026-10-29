@@ -248,7 +248,8 @@ async function renderRecord(id) {
 
   const history = data.history.length
     ? h('ul', { class: 'history' }, data.history.map((a) => h('li', {},
-      h('div', { class: 'when' }, `${fmtDateTime(a.at)} · ${a.email} · ${a.action === 'create' ? 'יצירה' : 'עדכון'}`),
+      h('div', { class: 'when' }, `${fmtDateTime(a.at)} · ${a.email} · ${{ create: 'יצירה', post: 'עדכון פעילות' }[a.action] || 'עדכון'}`),
+      a.action === 'post' ? h('div', {}, a.changes?.files?.length ? `קבצים: ${a.changes.files.join(', ')}` : 'ללא קבצים') : null, // activity feed
       a.action === 'update' ? h('div', {}, Object.keys(a.changes || {}).map((k) => h('code', {}, meta.fields[k]?.label || k)).flatMap((x, i) => (i ? [', ', x] : [x]))) : null)))
     : h('p', { class: 'muted' }, 'אין עדיין שינויים מהפורטל.');
 
@@ -351,7 +352,7 @@ async function renderAdmin() {
         h('thead', {}, h('tr', {}, h('th', {}, 'מתי'), h('th', {}, 'מי'), h('th', {}, 'פעולה'), h('th', {}, 'בקשה'))),
         h('tbody', {}, entries.map((a) => h('tr', { onclick: a.case_id ? () => { location.hash = `#/r/${a.case_id}`; } : null },
           h('td', { class: 'num' }, fmtDateTime(a.at)), h('td', { dir: 'ltr' }, a.email),
-          h('td', {}, { create: 'יצירת בקשה', update: 'עדכון בקשה', user_upsert: 'עדכון משתמש', user_delete: 'הסרת משתמש' }[a.action] || a.action),
+          h('td', {}, { create: 'יצירת בקשה', update: 'עדכון בקשה', user_upsert: 'עדכון משתמש', user_delete: 'הסרת משתמש', post: 'עדכון פעילות' }[a.action] || a.action),
           h('td', {}, a.case_number || (a.changes?.email ?? '')))))) : h('p', { class: 'muted' }, 'אין עדיין פעילות.')));
 }
 
