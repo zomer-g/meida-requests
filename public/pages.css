@@ -14,5 +14,3 @@
 .doc a { color: #1b5fb8; text-decoration: underline; }
 .doc .updated { color: #4f5a73; }
 .doc a:focus-visible, .footer a:focus-visible, .skip-link:focus-visible { outline: 3px solid #1b5fb8; outline-offset: 2px; }
-/* Facts the organization still has to supply or confirm. */
-.placeholder { background: #fff3c4; color: #5c4400; border: 1px dashed #8a6d00; border-radius: 3px; padding: 0 4px; }
