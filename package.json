@@ -1,0 +1,18 @@
+{
+  "name": "meida-requests",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Portal for viewing, creating and updating FOI requests (Salesforce Cases) of the Movement for Freedom of Information",
+  "type": "module",
+  "main": "server/index.js",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --env-file=.env server/index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "jose": "^5.9.6",
+    "pg": "^8.13.1"
+  }
+}

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ניהול בקשות מידע · התנועה לחופש המידע</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Assistant:wght@400;600;700&display=swap">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="topbar">
+    <div class="container topbar-inner">
+      <span>מערכת ניהול בקשות חופש מידע</span>
+      <span id="who"></span>
+    </div>
+  </div>
+  <header class="header">
+    <div class="container header-inner">
+      <a class="brand" href="#/" title="התנועה לחופש המידע"><img src="/logo.png" alt="התנועה לחופש המידע" width="204" height="50"></a>
+      <nav id="nav" class="nav" hidden>
+        <a href="#/">הבקשות</a>
+        <a href="#/admin" data-admin hidden>ניהול משתמשים</a>
+        <a class="button is-primary" href="#/new">+ בקשה חדשה</a>
+      </nav>
+    </div>
+  </header>
+  <main class="container" id="view" aria-live="polite">
+    <p class="muted">טוען…</p>
+  </main>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
