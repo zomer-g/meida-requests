@@ -64,6 +64,17 @@ export async function sf(path, { method = 'GET', body } = {}, retried = false) {
   return data;
 }
 
+// Authenticated request returning the raw Response, for binary downloads (activity feed files).
+export async function sfFetch(path, retried = false) {
+  const t = await requestToken();
+  const res = await fetch(`${t.instance}/services/data/v${API_VERSION}${path}`, { headers: { Authorization: `Bearer ${t.access}` } });
+  if (res.status === 401 && !retried) {
+    token = null;
+    return sfFetch(path, true);
+  }
+  return res;
+}
+
 export const query = (soql) => sf(`/query?q=${encodeURIComponent(soql)}`);
 
 // Salesforce Ids are 15 or 18 alphanumeric characters; validate before putting one in SOQL.

@@ -24,7 +24,7 @@ function scope(user) {
   return parts.join(' AND ');
 }
 
-async function loadCase(user, id) {
+export async function loadCase(user, id) {
   if (!isId(id)) return null;
   const fields = ['Id', 'CaseNumber', 'OwnerId', 'Owner.Name', 'CreatedDate', 'LastModifiedDate', 'ClosedDate', ...EDITABLE_FIELDS, ...LOOKUP_NAMES];
   const r = await query(`SELECT ${[...new Set(fields)].join(', ')} FROM Case WHERE Id = '${id}' AND ${scope(user)} LIMIT 1`);

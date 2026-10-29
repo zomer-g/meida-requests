@@ -1,5 +1,7 @@
 // Single-page portal: #/ list, #/r/<id> request, #/new new request, #/admin users.
 
+import { renderActivity } from './activity.js'; // activity feed panel on the request page
+
 const view = document.getElementById('view');
 let me = null;
 let meta = null;
@@ -260,6 +262,7 @@ async function renderRecord(id) {
           h('span', {}, `נוצרה ${fmtDate(r.CreatedDate)}`),
           h('span', {}, `עודכנה ${fmtDateTime(r.LastModifiedDate)}`)))),
     h('form', { onsubmit: onSubmit, novalidate: true }, form.sections, h('div', { class: 'actions' }, save, h('a', { class: 'button', href: '#/' }, 'ביטול'))),
+    renderActivity(r.Id, { h, api, toast, fmtDateTime }), // activity feed (public/activity.js)
     h('section', { class: 'card' }, h('h2', {}, 'היסטוריית שינויים בפורטל'), history));
 }
 
