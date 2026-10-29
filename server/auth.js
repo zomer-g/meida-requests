@@ -82,6 +82,15 @@ export function requireAdmin(req, res, next) {
   next();
 }
 
+// Managers manage the students of their own group (see /team in routes.js); admins any group.
+export function requireManager(req, res, next) {
+  if (!['manager', 'admin'].includes(req.user?.role)) {
+    res.locals.denyReason = 'managers_only';
+    return res.status(403).json({ error: 'managers_only' });
+  }
+  next();
+}
+
 // The identity cookie travels on any same-site request, so writes must come from our own pages.
 export function sameOrigin(req, res, next) {
   if (req.method === 'GET' || req.method === 'HEAD') return next();

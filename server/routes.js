@@ -2,7 +2,7 @@ import express from 'express';
 import { sf, query, isId, soqlString, soqlContains, SalesforceError } from './salesforce.js';
 import { getMeta } from './meta.js';
 import { EDITABLE_FIELDS, REQUEST_RECORD_TYPE, LOOKUPS, HANDLER_FIELD } from './fields.js';
-import { requireUser, requireAdmin, sameOrigin, adminEmails } from './auth.js';
+import { requireUser, requireAdmin, requireManager, sameOrigin, adminEmails } from './auth.js';
 import {
   searchAccess, accessSummary,
   audit, auditFor, searchAudit, listUsers, findUser, upsertUser, deleteUser, usersByContact,
@@ -449,11 +449,13 @@ api.delete('/admin/users/:email', requireAdmin, wrap(async (req, res) => {
 
 // ---- admin: CSV import ----
 
-async function importPlan(req) {
+// `team` (a manager's import): group and role are fixed to the manager's group and students, and
+// existing users of another group or role are left alone ('blocked'), since only admins move them.
+async function importPlan(req, team = null) {
   const groups = await listGroups();
-  const group = groups.find((g) => g.id === parseInt(req.body?.groupId, 10));
+  const group = groups.find((g) => g.id === (team ? team.id : parseInt(req.body?.groupId, 10)));
   if (!group) throw bad('יש לבחור קבוצה');
-  const role = ['student', 'employee'].includes(req.body?.role) ? req.body.role : 'student';
+  const role = team ? 'student' : ['student', 'employee'].includes(req.body?.role) ? req.body.role : 'student';
   const { rows, header } = parsePeople(req.body?.text);
   if (!rows.length) throw bad('הקובץ ריק');
   if (rows.length > 2000) throw bad('אפשר לייבא עד 2,000 שורות בכל פעם');
@@ -463,6 +465,11 @@ async function importPlan(req) {
     if (r.error) { r.status = 'invalid'; continue; }
     const u = current.get(r.email);
     if (!u) { r.status = 'new'; continue; }
+    if (team && (u.group_id !== group.id || u.role !== 'student' || adminEmails.has(u.email))) {
+      r.status = 'blocked';
+      r.note = u.group_id !== group.id ? `רשום/ה ב${gname(u.group_id)}; רק אדמין יכול להעביר` : `רשום/ה כ${ROLE_LABELS[u.role]}; רק אדמין יכול לשנות`;
+      continue;
+    }
     const notes = [];
     if (u.group_id !== group.id) notes.push(`מעבר מ${gname(u.group_id)}`);
     if (u.name !== r.name) notes.push(`שם: ${u.name || '—'} ← ${r.name}`);
@@ -473,14 +480,14 @@ async function importPlan(req) {
   return { groups, group, role, rows, header };
 }
 
-api.post('/admin/import/preview', requireAdmin, wrap(async (req, res) => {
-  const { group, role, rows, header } = await importPlan(req);
+async function importPreview(req, res, team = null) {
+  const { group, role, rows, header } = await importPlan(req, team);
   const count = (s) => rows.filter((r) => r.status === s).length;
-  res.json({ group: groupInfo(group), role, header, rows, counts: { new: count('new'), update: count('update'), same: count('same'), invalid: count('invalid') } });
-}));
+  res.json({ group: groupInfo(group), role, header, rows, counts: { new: count('new'), update: count('update'), same: count('same'), invalid: count('invalid'), blocked: count('blocked') } });
+}
 
-api.post('/admin/import', requireAdmin, wrap(async (req, res) => {
-  const { groups, group, role, rows } = await importPlan(req);
+async function importRun(req, res, team = null) {
+  const { groups, group, role, rows } = await importPlan(req, team);
   const todo = rows.filter((r) => r.status === 'new' || r.status === 'update');
   const results = await saveUsers(req.user.email, todo.map((r) => ({
     email: r.email, name: r.name, group_id: group.id, ...(r.status === 'new' ? { role } : {}),
@@ -496,6 +503,89 @@ api.post('/admin/import', requireAdmin, wrap(async (req, res) => {
   };
   await audit({ email: req.user.email, action: 'import', target: `${summary.added.length + summary.updated.length} משתמשים`, group_name: group.name, changes: summary });
   res.json({ ok: true, added: summary.added.length, updated: summary.updated.length, invalid: summary.invalid.length, contactErrors });
+}
+
+api.post('/admin/import/preview', requireAdmin, wrap((req, res) => importPreview(req, res)));
+api.post('/admin/import', requireAdmin, wrap((req, res) => importRun(req, res)));
+
+// ---- team: a manager's students (own group only; admins pick the group) ----
+
+// The group this request may manage students in, or answers 400/403 and returns null.
+async function teamGroup(req, res) {
+  const groups = await listGroups();
+  const asked = parseInt(req.query.groupId ?? req.body?.groupId, 10);
+  if (req.user.role === 'admin') {
+    const g = groups.find((x) => x.id === asked);
+    if (!g) { res.status(400).json({ error: 'יש לבחור קבוצה' }); return null; }
+    return g;
+  }
+  const own = groups.find((x) => x.id === req.user.groupId);
+  if (!own) { res.status(400).json({ error: 'לא הוגדרה לך קבוצה; פנו לאדמין' }); return null; }
+  if (Number.isFinite(asked) && asked !== own.id) {
+    res.locals.denyReason = 'other_group';
+    res.status(403).json({ error: 'אפשר לנהל רק את הסטודנטים של הקבוצה שלך' });
+    return null;
+  }
+  return own;
+}
+
+// A student of this group that a manager may change, else answers and returns null.
+async function teamStudent(req, res, group) {
+  const u = await findUser(String(req.params.email || '').toLowerCase());
+  if (!u) { res.status(404).json({ error: 'המשתמש לא נמצא' }); return null; }
+  if (u.group_id !== group.id || u.role !== 'student' || adminEmails.has(u.email)) {
+    res.locals.denyReason = 'other_group';
+    res.status(403).json({ error: 'אפשר לשנות רק סטודנטים של הקבוצה שלך' });
+    return null;
+  }
+  return u;
+}
+
+api.get('/team/students', requireManager, wrap(async (req, res) => {
+  const group = await teamGroup(req, res);
+  if (!group) return;
+  const students = (await listUsers()).filter((u) => u.group_id === group.id && u.role === 'student')
+    .map(({ email, name, sf_contact_id, contact_error, created_at }) => ({ email, name, linked: !!sf_contact_id, contact_error, created_at }));
+  res.json({ group: groupInfo(group), students });
+}));
+
+api.post('/team/students', requireManager, wrap(async (req, res) => {
+  const group = await teamGroup(req, res);
+  if (!group) return;
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (!isEmail(email)) throw bad('כתובת מייל לא תקינה');
+  const name = String(req.body?.name || '').replace(/\s+/g, ' ').trim().slice(0, 100) || null;
+  const before = await findUser(email);
+  if (before && (before.group_id !== group.id || before.role !== 'student' || adminEmails.has(email))) {
+    res.locals.denyReason = 'other_group';
+    return res.status(403).json({ error: 'הכתובת כבר רשומה בקבוצה אחרת או בתפקיד אחר; רק אדמין יכול לשנות אותה' });
+  }
+  const groups = await listGroups();
+  const [r] = await saveUsers(req.user.email, [{ email, name: name ?? before?.name ?? null, role: 'student', group_id: group.id, sf_user_id: null, sf_user_name: null }], groups);
+  if (Object.keys(r.changes).length) {
+    await audit({ email: req.user.email, action: before ? 'user_update' : 'user_create', target: email, group_name: group.name, changes: r.changes });
+  }
+  res.json({ ok: true, contactError: r.after.contact_error });
+}));
+
+api.delete('/team/students/:email', requireManager, wrap(async (req, res) => {
+  const group = await teamGroup(req, res);
+  if (!group) return;
+  const u = await teamStudent(req, res, group);
+  if (!u) return;
+  await deleteUser(u.email);
+  await audit({ email: req.user.email, action: 'user_delete', target: u.email, group_name: group.name, changes: { email: u.email, name: u.name, role: ROLE_LABELS[u.role] } });
+  res.json({ ok: true });
+}));
+
+api.post('/team/import/preview', requireManager, wrap(async (req, res) => {
+  const group = await teamGroup(req, res);
+  if (group) await importPreview(req, res, group);
+}));
+
+api.post('/team/import', requireManager, wrap(async (req, res) => {
+  const group = await teamGroup(req, res);
+  if (group) await importRun(req, res, group);
 }));
 
 // ---- admin: log ----

@@ -38,6 +38,8 @@ const ACTIONS = [
   [null, /^\/admin\/users/, 'admin_users'],
   [null, /^\/admin\/groups/, 'admin_groups'],
   [null, /^\/admin\//, 'admin_other'],
+  ['POST', /^\/team\/import(\/preview)?$/, 'team_import'],
+  [null, /^\/team\//, 'team_students'],
 ];
 
 function classify(method, path) {

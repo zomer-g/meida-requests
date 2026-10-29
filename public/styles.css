@@ -178,3 +178,10 @@ h2[tabindex="-1"]:focus { outline: none; }
   .hide-sm { display: none; }
   .card { padding: 18px 16px; }
 }
+
+/* help pages (public/help.js) */
+.help-part { margin: 28px 0 12px; font-size: 1.6rem; }
+.help ol, .help ul { padding-inline-start: 1.4em; margin: 0 0 .6em; }
+.help li { margin-bottom: 6px; }
+.help-toc { display: flex; gap: 8px 20px; flex-wrap: wrap; list-style: none; padding: 0; margin: 0 0 12px; }
+.help-example { background: var(--blue-light); padding: 10px 14px; border-radius: var(--radius); font-family: Consolas, monospace; white-space: pre; overflow-x: auto; text-align: left; }

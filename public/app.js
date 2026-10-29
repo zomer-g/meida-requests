@@ -3,6 +3,8 @@
 // #/admin/log edit log, #/admin/access access log.
 
 import { renderActivity } from './activity.js'; // activity feed panel on the request page
+import { renderStudents } from './students.js'; // managers: students of their group (#/team)
+import { renderHelp } from './help.js'; // role-based help (#/help)
 
 const view = document.getElementById('view');
 let me = null;
@@ -675,9 +677,9 @@ const ACCESS_ACTIONS = {
   view_request: 'צפייה בבקשה', update_request: 'עדכון בקשה', create_request: 'יצירת בקשה', view_activity: 'צפייה בעדכוני פעילות',
   post_activity: 'הוספת עדכון פעילות', download_file: 'הורדת קובץ', lookup: 'חיפוש לשדה בחירה',
   admin_users: 'ניהול משתמשים', admin_groups: 'ניהול קבוצות', admin_import: 'ייבוא משתמשים', admin_view_edit_log: 'צפייה ביומן העריכות',
-  admin_view_access_log: 'צפייה ביומן הגישה', admin_other: 'ניהול', other: 'אחר',
+  admin_view_access_log: 'צפייה ביומן הגישה', admin_other: 'ניהול', team_students: 'ניהול סטודנטים (מנהל/ת)', team_import: 'ייבוא סטודנטים (מנהל/ת)', other: 'אחר',
 };
-const DENY_REASONS = { no_access: 'אין לו/ה גישה לפורטל', admin_only: 'עמוד לאדמין בלבד', outside_board: 'בקשה מחוץ ללוח שלו/ה', forbidden: 'אין הרשאה', not_signed_in: 'לא מחובר/ת' };
+const DENY_REASONS = { no_access: 'אין לו/ה גישה לפורטל', admin_only: 'עמוד לאדמין בלבד', outside_board: 'בקשה מחוץ ללוח שלו/ה', forbidden: 'אין הרשאה', not_signed_in: 'לא מחובר/ת', managers_only: 'עמוד למנהלים בלבד', other_group: 'משתמש/ת מקבוצה אחרת' };
 
 function uaShort(ua) {
   if (!ua) return '';
@@ -822,6 +824,8 @@ async function route() {
     if (hash === '#/admin/groups') return await renderGroups();
     if (hash === '#/admin/log') return await renderLog();
     if (hash === '#/admin/access') return await renderAccess();
+    if (hash === '#/team') return await renderStudents(view, { h, api, toast, me, boards }); // students.js
+    if (hash === '#/help') return renderHelp(view, { h, me }); // help.js
     return await renderList(null);
   } catch (e) {
     if (e.message !== 'redirect') view.replaceChildren(h('p', { class: 'notice error' }, e.message));
@@ -845,6 +849,7 @@ async function boot() {
   document.getElementById('who').replaceChildren(h('span', {}, `${who} · `), h('a', { href: '/xhost-auth/logout?return_to=/' }, 'התנתקות'));
   document.getElementById('nav').hidden = false;
   if (isAdmin()) for (const a of document.querySelectorAll('[data-admin]')) a.hidden = false;
+  if (['manager', 'admin'].includes(me.role)) for (const a of document.querySelectorAll('[data-manager]')) a.hidden = false; // #/team
   try {
     [meta, { boards }] = await Promise.all([api('/meta'), api('/boards')]);
   } catch (e) { return view.replaceChildren(h('p', { class: 'notice error' }, `לא ניתן לטעון את הגדרות סיילספורס: ${e.message}`)); }
