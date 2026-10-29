@@ -1,5 +1,6 @@
 // Single-page portal: #/ requests (all boards or the user's own), #/b/<group> one board,
-// #/r/<id> request, #/new or #/b/<group>/new new request, #/admin users, #/admin/groups, #/admin/log.
+// #/r/<id> request, #/new or #/b/<group>/new new request, #/admin users, #/admin/groups,
+// #/admin/log edit log, #/admin/access access log.
 
 import { renderActivity } from './activity.js'; // activity feed panel on the request page
 
@@ -652,8 +653,9 @@ async function renderLog() {
   } }, 'ניקוי סינון');
 
   view.replaceChildren(
-    h('h1', {}, 'יומן פעולות'),
-    h('p', { class: 'muted' }, 'כל פעולה שנעשתה דרך הפורטל: יצירה ועדכון של בקשות (שדה אחרי שדה, מה היה ומה נהיה), ניהול משתמשים וקבוצות וייבוא.'),
+    h('h1', {}, 'יומן עריכות'),
+    h('p', { class: 'muted' }, 'כל שינוי שנעשה דרך הפורטל: יצירה ועדכון של בקשות (שדה אחרי שדה, מה היה ומה נהיה), ניהול משתמשים וקבוצות וייבוא. מי נכנס ומה פתח מופיע ב',
+      h('a', { href: '#/admin/access' }, 'יומן הגישה'), '.'),
     h('div', { class: 'card filters' },
       h('div', { class: 'field' }, h('label', { for: 'l_email' }, 'משתמש'), email),
       h('div', { class: 'field' }, h('label', { for: 'l_case' }, 'מספר בקשה'), caseNo),
@@ -663,6 +665,145 @@ async function renderLog() {
       h('div', { class: 'field reset' }, reset)),
     body);
   load();
+}
+
+// ---------- admin: access log ----------
+
+const ACCESS_KINDS = { session: 'כניסה למערכת', read: 'צפייה', write: 'שינוי', denied: 'ניסיון שנדחה', error: 'שגיאה' };
+const ACCESS_ACTIONS = {
+  sign_in: 'כניסה (התחברות חדשה)', app_open: 'פתיחת הפורטל', app_config: 'טעינת הגדרות', list_requests: 'רשימת בקשות / לוח',
+  view_request: 'צפייה בבקשה', update_request: 'עדכון בקשה', create_request: 'יצירת בקשה', view_activity: 'צפייה בעדכוני פעילות',
+  post_activity: 'הוספת עדכון פעילות', download_file: 'הורדת קובץ', lookup: 'חיפוש לשדה בחירה',
+  admin_users: 'ניהול משתמשים', admin_groups: 'ניהול קבוצות', admin_import: 'ייבוא משתמשים', admin_view_edit_log: 'צפייה ביומן העריכות',
+  admin_view_access_log: 'צפייה ביומן הגישה', admin_other: 'ניהול', other: 'אחר',
+};
+const DENY_REASONS = { no_access: 'אין לו/ה גישה לפורטל', admin_only: 'עמוד לאדמין בלבד', outside_board: 'בקשה מחוץ ללוח שלו/ה', forbidden: 'אין הרשאה', not_signed_in: 'לא מחובר/ת' };
+
+function uaShort(ua) {
+  if (!ua) return '';
+  const browser = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'אחר';
+  const os = /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Windows/.test(ua) ? 'Windows' : /Mac OS/.test(ua) ? 'macOS' : /Linux/.test(ua) ? 'Linux' : '';
+  return [browser, os].filter(Boolean).join(' · ');
+}
+
+const accessState = { email: '', kind: '', case: '', from: '', to: '', denied: false, page: 0 };
+
+async function renderAccess() {
+  if (!isAdmin()) { location.hash = '#/'; return; }
+  const field = (id, label, control) => h('div', { class: 'field' }, h('label', { for: id }, label), control);
+  const email = h('select', { id: 'a_email' }, h('option', { value: '' }, 'כל המשתמשים'));
+  const kind = h('select', { id: 'a_kind' }, h('option', { value: '' }, 'כל הסוגים'), Object.entries(ACCESS_KINDS).map(([v, l]) => h('option', { value: v }, l)));
+  const caseNo = h('input', { type: 'text', id: 'a_case', inputmode: 'numeric', autocomplete: 'off', 'aria-describedby': 'a_case_help' });
+  const from = h('input', { type: 'date', id: 'a_from' });
+  const to = h('input', { type: 'date', id: 'a_to' });
+  const denied = h('input', { type: 'checkbox', id: 'a_denied' });
+  const exportLink = h('a', { class: 'button is-small', download: true }, 'ייצוא ל-CSV');
+  const summaryBody = h('div', {}, h('p', { class: 'muted' }, 'טוען…'));
+  const resultsHeading = h('h2', { id: 'a_results', tabindex: '-1' }, 'ציר זמן');
+  const status = h('p', { class: 'muted', role: 'status', 'aria-live': 'polite' });
+  const body = h('div');
+
+  const params = (withPage) => new URLSearchParams(Object.entries({ ...accessState, denied: accessState.denied ? '1' : '', page: withPage ? accessState.page : '' })
+    .filter(([, v]) => v !== '' && v !== false && v !== null));
+  const syncInputs = () => {
+    email.value = accessState.email; kind.value = accessState.kind; caseNo.value = accessState.case;
+    from.value = accessState.from; to.value = accessState.to; denied.checked = accessState.denied;
+  };
+
+  const loadSummary = async () => {
+    try {
+      const data = await api(`/admin/access/summary?${new URLSearchParams(Object.entries({ from: accessState.from, to: accessState.to }).filter(([, v]) => v))}`);
+      email.replaceChildren(h('option', { value: '' }, 'כל המשתמשים'), ...data.users.map((u) => h('option', { value: u.email }, u.name ? `${u.name} (${u.email})` : u.email)));
+      email.value = accessState.email;
+      retention.textContent = `רשומות נשמרות ${data.retentionDays} ימים ונמחקות אוטומטית אחר כך.`;
+      summaryBody.replaceChildren(h('div', { class: 'table-wrap' }, h('table', { class: 'plain' },
+        h('caption', { class: 'sr-only' }, 'סיכום פעילות לפי משתמש'),
+        h('thead', {}, h('tr', {}, ['משתמש', 'תפקיד', 'קבוצה', 'נראה לאחרונה', 'כניסות', 'פעולות', 'ניסיונות שנדחו'].map((t) => h('th', { scope: 'col' }, t)))),
+        h('tbody', {}, data.users.map((u) => h('tr', { class: u.denied ? 'bad' : null },
+          h('th', { scope: 'row' }, h('button', {
+            type: 'button', class: 'linklike', 'aria-label': `הצגת ציר הזמן של ${u.name || u.email}`,
+            onclick: () => { Object.assign(accessState, { email: u.email, page: 0 }); syncInputs(); loadTimeline(true); },
+          }, u.name || u.email), u.name ? h('small', { dir: 'ltr', class: 'muted block' }, u.email) : null),
+          h('td', {}, u.portalUser || u.role ? u.role || '' : h('span', { class: 'pill refused' }, 'לא משתמש/ת בפורטל')),
+          h('td', {}, u.group || ''),
+          h('td', { class: 'num' }, u.last_seen ? fmtDateTime(u.last_seen) : 'עדיין לא נכנס/ה'),
+          h('td', { class: 'num' }, u.sessions), h('td', { class: 'num' }, u.actions),
+          h('td', { class: 'num' }, u.denied ? h('strong', {}, u.denied) : 0)))))));
+    } catch (e) { summaryBody.replaceChildren(h('p', { class: 'notice error' }, e.message)); }
+  };
+
+  const loadTimeline = async (focus = false) => {
+    exportLink.href = `/api/admin/access.csv?${params(false)}`;
+    status.textContent = 'טוען…';
+    try {
+      const data = await api(`/admin/access?${params(true)}`);
+      const pages = Math.max(1, Math.ceil(data.total / data.pageSize));
+      status.textContent = `${data.total} רשומות${data.total ? ` · עמוד ${accessState.page + 1} מתוך ${pages}` : ''}`;
+      if (!data.entries.length) body.replaceChildren(h('p', { class: 'notice' }, 'אין רשומות שמתאימות לסינון.'));
+      else {
+        body.replaceChildren(
+          h('div', { class: 'card table-wrap', style: 'padding:0' }, h('table', { class: 'log plain' },
+            h('caption', { class: 'sr-only' }, 'ציר זמן של כניסות ופעולות, מהחדש לישן'),
+            h('thead', {}, h('tr', {}, ['מתי', 'מי', 'סוג', 'פעולה', 'בקשה', 'תוצאה', 'כתובת IP', 'דפדפן'].map((t, i) => h('th', { scope: 'col', class: i > 5 ? 'hide-sm' : null }, t)))),
+            h('tbody', {}, data.entries.map((a) => h('tr', { class: a.kind === 'denied' ? 'bad' : null },
+              h('td', { class: 'num' }, fmtDateTime(a.at)),
+              h('td', { dir: 'ltr' }, a.email || ''),
+              h('td', {}, h('span', { class: `pill ${a.kind === 'denied' || a.kind === 'error' ? 'refused' : a.kind === 'session' ? 'received' : ''}` }, ACCESS_KINDS[a.kind] || a.kind)),
+              h('td', {}, ACCESS_ACTIONS[a.action] || a.action, a.route ? h('small', { class: 'muted block', dir: 'ltr' }, `${a.method || ''} ${a.route}`) : null),
+              h('td', {}, a.case_id
+                ? [h('a', { href: `#/r/${a.case_id}` }, a.case_number || 'בקשה'),
+                  a.kind === 'write' && a.case_number ? h('small', { class: 'block' }, h('a', {
+                    href: '#/admin/log', onclick: () => Object.assign(logState, { email: '', action: '', from: '', to: '', page: 0, case: String(a.case_number).replace(/^0+/, '') }),
+                  }, 'פירוט השינויים')) : null]
+                : ''),
+              h('td', {}, a.kind === 'denied' ? DENY_REASONS[a.reason] || a.reason || 'נדחה' : a.status ? (a.status < 400 ? 'הצליח' : `שגיאה ${a.status}`) : ''),
+              h('td', { class: 'hide-sm', dir: 'ltr' }, a.ip || ''),
+              h('td', { class: 'hide-sm', title: a.user_agent || '' }, uaShort(a.user_agent))))))),
+          h('nav', { class: 'pager', 'aria-label': 'דפדוף בציר הזמן' },
+            h('button', { class: 'button is-small', type: 'button', disabled: accessState.page === 0, onclick: () => { accessState.page--; loadTimeline(true); } }, '→ הקודם'),
+            h('span', { class: 'muted' }, `עמוד ${accessState.page + 1} מתוך ${pages}`),
+            h('button', { class: 'button is-small', type: 'button', disabled: accessState.page + 1 >= pages, onclick: () => { accessState.page++; loadTimeline(true); } }, 'הבא ←')));
+      }
+    } catch (e) { status.textContent = ''; body.replaceChildren(h('p', { class: 'notice error', role: 'alert' }, e.message)); }
+    if (focus) resultsHeading.focus();
+  };
+
+  const apply = (e) => {
+    e.preventDefault();
+    Object.assign(accessState, { email: email.value, kind: kind.value, case: caseNo.value.replace(/\D/g, ''), from: from.value, to: to.value, denied: denied.checked, page: 0 });
+    loadSummary();
+    loadTimeline(true);
+  };
+  const reset = () => {
+    Object.assign(accessState, { email: '', kind: '', case: '', from: '', to: '', denied: false, page: 0 });
+    syncInputs();
+    loadSummary();
+    loadTimeline(true);
+  };
+  const retention = h('span');
+
+  view.replaceChildren(
+    h('h1', {}, 'יומן גישה'),
+    h('p', { class: 'muted' }, 'מי נכנס לפורטל, מתי, ומה פתח או עשה, כולל ניסיונות שנדחו (חשבון Google בלי גישה, בקשה מחוץ ללוח, עמוד אדמין). הפירוט שדה אחרי שדה של כל שינוי נמצא ב',
+      h('a', { href: '#/admin/log' }, 'יומן העריכות'), '. ', retention),
+    h('section', { class: 'card', 'aria-labelledby': 'a_summary' }, h('h2', { id: 'a_summary' }, 'סיכום לפי משתמש'), summaryBody),
+    h('section', { 'aria-labelledby': 'a_results' },
+      h('form', { class: 'card filters', role: 'search', 'aria-label': 'סינון יומן הגישה', onsubmit: apply },
+        field('a_email', 'משתמש', email),
+        field('a_kind', 'סוג אירוע', kind),
+        h('div', { class: 'field' }, h('label', { for: 'a_case' }, 'מספר בקשה'), caseNo, h('span', { class: 'help', id: 'a_case_help' }, 'ספרות בלבד, למשל 15277')),
+        field('a_from', 'מתאריך', from),
+        field('a_to', 'עד תאריך', to),
+        h('div', { class: 'field check' }, denied, h('label', { for: 'a_denied' }, 'רק ניסיונות שנדחו')),
+        h('div', { class: 'field reset' }, h('div', { class: 'row-actions' },
+          h('button', { class: 'button is-primary is-small', type: 'submit' }, 'סינון'),
+          h('button', { class: 'button is-small', type: 'button', onclick: reset }, 'ניקוי'), exportLink))),
+      h('div', { class: 'card-head' }, resultsHeading),
+      status,
+      body));
+  syncInputs();
+  loadSummary();
+  loadTimeline();
 }
 
 // ---------- boot ----------
@@ -680,6 +821,7 @@ async function route() {
     if (hash === '#/admin') return await renderAdmin();
     if (hash === '#/admin/groups') return await renderGroups();
     if (hash === '#/admin/log') return await renderLog();
+    if (hash === '#/admin/access') return await renderAccess();
     return await renderList(null);
   } catch (e) {
     if (e.message !== 'redirect') view.replaceChildren(h('p', { class: 'notice error' }, e.message));

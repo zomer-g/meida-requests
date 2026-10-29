@@ -4,11 +4,13 @@ import { getMeta } from './meta.js';
 import { EDITABLE_FIELDS, REQUEST_RECORD_TYPE, LOOKUPS, HANDLER_FIELD } from './fields.js';
 import { requireUser, requireAdmin, sameOrigin, adminEmails } from './auth.js';
 import {
+  searchAccess, accessSummary,
   audit, auditFor, searchAudit, listUsers, findUser, upsertUser, deleteUser, usersByContact,
   listGroups, saveGroup, ROLES,
 } from './db.js';
 import { canSeeAll, caseFilter, visibleGroups, groupOfOwner, ensureContacts } from './access.js';
 import { parsePeople, isEmail } from './csv.js';
+import { rememberCase, RETENTION_DAYS } from './accesslog.js';
 
 export const api = express.Router();
 api.use(express.json({ limit: '2mb' }));
@@ -38,6 +40,7 @@ export async function loadCase(user, id) {
   if (!isId(id)) return null;
   const fields = ['Id', 'CaseNumber', 'OwnerId', 'Owner.Name', 'CreatedDate', 'LastModifiedDate', 'ClosedDate', ...EDITABLE_FIELDS, ...LOOKUP_NAMES];
   const r = await query(`SELECT ${[...new Set(fields)].join(', ')} FROM Case WHERE Id = '${id}' AND ${await scope(user)} LIMIT 1`);
+  if (r.records[0]) rememberCase(r.records[0].Id, r.records[0].CaseNumber);
   return r.records[0] || null;
 }
 
@@ -510,4 +513,68 @@ api.get('/admin/audit', requireAdmin, wrap(async (req, res) => {
     pageSize: 50,
   });
   res.json({ ...result, page, pageSize: 50 });
+}));
+
+// ---- admin: access log (who signed in, when, and what they opened or did) ----
+
+const ACCESS_KINDS = ['session', 'read', 'write', 'denied', 'error'];
+
+function accessFilters(q) {
+  const date = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(v || '') ? v : null);
+  return {
+    email: String(q.email || '').trim().toLowerCase() || null,
+    kind: ACCESS_KINDS.includes(q.kind) ? q.kind : null,
+    caseNumber: /^\d{1,12}$/.test(q.case || '') ? q.case : null,
+    from: date(q.from),
+    to: date(q.to),
+    denied: q.denied === '1',
+  };
+}
+
+// One row per person: portal users (even if never seen) plus anyone who appears in the log,
+// such as Google accounts that were refused.
+api.get('/admin/access/summary', requireAdmin, wrap(async (req, res) => {
+  const f = accessFilters(req.query);
+  const [stats, users, groups] = await Promise.all([accessSummary(f), listUsers(), listGroups()]);
+  const byEmail = new Map(stats.map((s) => [s.email, s]));
+  const known = new Map(users.map((u) => [u.email, u]));
+  for (const e of adminEmails) if (!known.has(e)) known.set(e, { email: e, role: 'admin' });
+  const rows = [...new Set([...known.keys(), ...byEmail.keys()])].filter(Boolean).map((email) => {
+    const u = known.get(email);
+    const s = byEmail.get(email) || {};
+    return {
+      email, name: u?.name || null,
+      role: adminEmails.has(email) ? ROLE_LABELS.admin : u ? ROLE_LABELS[u.role] : null,
+      group: groups.find((g) => g.id === u?.group_id)?.name || null,
+      portalUser: !!u,
+      last_seen: s.last_seen || null, sessions: s.sessions || 0, actions: s.actions || 0, denied: s.denied || 0,
+    };
+  });
+  rows.sort((a, b) => (+new Date(b.last_seen || 0)) - (+new Date(a.last_seen || 0)) || a.email.localeCompare(b.email));
+  res.json({ users: rows, retentionDays: RETENTION_DAYS });
+}));
+
+api.get('/admin/access', requireAdmin, wrap(async (req, res) => {
+  const page = Math.max(0, parseInt(req.query.page, 10) || 0);
+  const result = await searchAccess(accessFilters(req.query), { page, pageSize: 50 });
+  res.json({ ...result, page, pageSize: 50 });
+}));
+
+// CSV of the filtered timeline (UTF-8 with BOM so Excel shows Hebrew), at most 50,000 rows.
+const csvCell = (v) => {
+  let s = v === null || v === undefined ? '' : v instanceof Date ? v.toISOString() : String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`; // keep spreadsheet formulas from running
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+
+api.get('/admin/access.csv', requireAdmin, wrap(async (req, res) => {
+  const { entries } = await searchAccess(accessFilters(req.query), { page: 0, pageSize: 50000 });
+  const cols = ['at', 'email', 'kind', 'action', 'method', 'route', 'status', 'reason', 'case_number', 'case_id', 'target', 'ip', 'user_agent', 'session_id'];
+  const lines = [cols.join(','), ...entries.map((e) => cols.map((c) => csvCell(e[c])).join(','))];
+  res.set({
+    'Content-Type': 'text/csv; charset=utf-8',
+    'Content-Disposition': `attachment; filename="access-log-${new Date().toISOString().slice(0, 10)}.csv"`,
+    'Cache-Control': 'no-store',
+  });
+  res.send(`\uFEFF${lines.join('\r\n')}\r\n`);
 }));

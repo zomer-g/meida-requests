@@ -22,6 +22,12 @@ and view, create and update FOI requests (Salesforce Cases, record type `בקש�
   with a preview first.
 - Every create/update (field by field, from → to with labels), user/group change and import is written to `audit_log`;
   admins follow it at `#/admin/log` with filters and paging.
+- Access log (`access_log`, `server/accesslog.js`): every API request (reads too), every new sign-in session (first
+  request with a new identity token) and every denied attempt (Google account without access, admin-only page, a
+  request outside the user's board), with email, time, action, case, result, IP and user agent. Written in batches
+  every 2 s so it never slows or fails a request; no bodies, search text, file contents or tokens. Admins see a
+  per-user summary, a filtered timeline and CSV export at `#/admin/access`. Kept `ACCESS_LOG_RETENTION_DAYS`
+  (default 365) days, cleaned daily.
 
-Env: `SF_LOGIN_URL`, `SF_CLIENT_ID`, `SF_CLIENT_SECRET`, `ADMIN_EMAILS`, `NODE_ENV=production`.
+Env: `SF_LOGIN_URL`, `SF_CLIENT_ID`, `SF_CLIENT_SECRET`, `ADMIN_EMAILS`, `NODE_ENV=production`, optional `ACCESS_LOG_RETENTION_DAYS`.
 Local run: `PORT=3456 DEV_USER_EMAIL=you@gmail.com ADMIN_EMAILS=you@gmail.com npm run dev`.

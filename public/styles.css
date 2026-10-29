@@ -150,6 +150,14 @@ ul.changes .to { color: var(--navy); font-weight: 600; }
 details.changes summary { cursor: pointer; color: var(--blue); }
 details.changes ul { margin: 6px 0 0; padding-inline-start: 18px; font-size: .85rem; }
 table.log td { font-size: .92rem; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.block { display: block; }
+.linklike { border: 0; background: none; padding: 0; font: inherit; font-weight: 600; color: var(--blue); cursor: pointer; text-align: start; }
+.linklike:hover { color: var(--blue-dark); text-decoration: underline; }
+.row-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+th[scope=row] { background: none; text-align: right; font-weight: 400; white-space: normal; }
+:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
+h2[tabindex="-1"]:focus { outline: none; }
 
 .pager { display: flex; gap: 10px; justify-content: center; margin: 18px 0; }
 

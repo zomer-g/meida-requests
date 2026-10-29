@@ -64,6 +64,29 @@ export async function migrate() {
     ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS group_name text;
     CREATE INDEX IF NOT EXISTS audit_log_at_idx ON audit_log (at DESC);
     CREATE INDEX IF NOT EXISTS audit_log_number_idx ON audit_log (case_number);
+
+    -- Access log: one row per API request and per new sign-in session (see accesslog.js).
+    -- No request bodies, file contents or tokens; session_id is a hash prefix of the identity token.
+    CREATE TABLE IF NOT EXISTS access_log (
+      id          bigserial PRIMARY KEY,
+      at          timestamptz NOT NULL DEFAULT now(),
+      email       text,
+      kind        text NOT NULL,
+      action      text NOT NULL,
+      method      text,
+      route       text,
+      status      int,
+      reason      text,
+      case_id     text,
+      case_number text,
+      target      text,
+      ip          text,
+      user_agent  text,
+      session_id  text
+    );
+    CREATE INDEX IF NOT EXISTS access_log_email_at_idx ON access_log (email, at DESC);
+    CREATE INDEX IF NOT EXISTS access_log_at_idx ON access_log (at DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS access_log_session_idx ON access_log (session_id) WHERE kind = 'session';
   `);
   const client = await pool.connect();
   try {
@@ -243,4 +266,101 @@ export async function searchAudit({ email, caseNumber, action, from, to, page = 
     pool.query('SELECT array(SELECT DISTINCT action FROM audit_log ORDER BY 1) AS actions, array(SELECT DISTINCT email FROM audit_log ORDER BY 1) AS emails'),
   ]);
   return { entries: list.rows, total: count.rows[0].n, actions: facets.rows[0].actions, emails: facets.rows[0].emails };
+}
+
+// ---- access log ----
+
+const ACCESS_COLUMNS = ['at', 'email', 'kind', 'action', 'method', 'route', 'status', 'reason', 'case_id', 'case_number', 'target', 'ip', 'user_agent', 'session_id'];
+mem.access = [];
+mem.accessSeq = 0;
+
+// Inserts a batch in one statement; a session row whose session_id is already logged is skipped.
+export async function insertAccess(rows) {
+  if (!rows.length) return;
+  if (!pool) {
+    for (const r of rows) {
+      if (r.kind === 'session' && mem.access.some((a) => a.kind === 'session' && a.session_id === r.session_id)) continue;
+      mem.access.unshift({ id: ++mem.accessSeq, ...r });
+    }
+    mem.access.length = Math.min(mem.access.length, 20000);
+    return;
+  }
+  const args = [];
+  const tuples = rows.map((r) => `(${ACCESS_COLUMNS.map((c) => { args.push(r[c] ?? null); return `$${args.length}`; }).join(', ')})`);
+  await pool.query(
+    `INSERT INTO access_log (${ACCESS_COLUMNS.join(', ')}) VALUES ${tuples.join(', ')}
+     ON CONFLICT (session_id) WHERE kind = 'session' DO NOTHING`,
+    args,
+  );
+}
+
+export async function pruneAccess(days) {
+  if (!pool) {
+    const cut = Date.now() - days * 86400000;
+    mem.access = mem.access.filter((a) => +a.at >= cut);
+    return 0;
+  }
+  const r = await pool.query('DELETE FROM access_log WHERE at < now() - make_interval(days => $1)', [days]);
+  return r.rowCount;
+}
+
+// Shared filter for the timeline, the CSV export and the per-user summary.
+// f: { email, kind, caseNumber, from, to (YYYY-MM-DD, Israel time), denied }
+function accessWhere(f) {
+  const where = [];
+  const args = [];
+  const add = (sql, v) => { args.push(v); where.push(sql.replaceAll('?', `$${args.length}`)); };
+  if (f.email) add('email = ?', f.email);
+  if (f.kind) add('kind = ?', f.kind);
+  if (f.denied) where.push("kind = 'denied'");
+  if (f.caseNumber) add("ltrim(case_number, '0') = ltrim(?, '0')", f.caseNumber);
+  if (f.from) add("(at AT TIME ZONE 'Asia/Jerusalem')::date >= ?::date", f.from);
+  if (f.to) add("(at AT TIME ZONE 'Asia/Jerusalem')::date <= ?::date", f.to);
+  return { cond: where.length ? `WHERE ${where.join(' AND ')}` : '', args };
+}
+
+function memAccess(f) {
+  const day = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: 'Asia/Jerusalem' });
+  return mem.access.filter((a) => (!f.email || a.email === f.email) && (!f.kind || a.kind === f.kind) && (!f.denied || a.kind === 'denied')
+    && (!f.caseNumber || String(a.case_number || '').replace(/^0+/, '') === f.caseNumber.replace(/^0+/, ''))
+    && (!f.from || day(a.at) >= f.from) && (!f.to || day(a.at) <= f.to));
+}
+
+export async function searchAccess(f, { page = 0, pageSize = 50 } = {}) {
+  if (!pool) {
+    const all = memAccess(f);
+    return { entries: all.slice(page * pageSize, (page + 1) * pageSize), total: all.length };
+  }
+  const { cond, args } = accessWhere(f);
+  const [list, count] = await Promise.all([
+    pool.query(`SELECT * FROM access_log ${cond} ORDER BY at DESC, id DESC LIMIT ${Number(pageSize)} OFFSET ${Number(page) * Number(pageSize)}`, args),
+    pool.query(`SELECT count(*)::int AS n FROM access_log ${cond}`, args),
+  ]);
+  return { entries: list.rows, total: count.rows[0].n };
+}
+
+// Per-user counts over the filtered events (email, kind filters are ignored here on purpose
+// except the date range, so the summary always lists everyone).
+export async function accessSummary(f) {
+  const range = { from: f.from, to: f.to };
+  if (!pool) {
+    const by = new Map();
+    for (const a of memAccess(range)) {
+      const s = by.get(a.email) || { email: a.email, last_seen: a.at, sessions: 0, actions: 0, denied: 0 };
+      if (+a.at > +s.last_seen) s.last_seen = a.at;
+      if (a.kind === 'session') s.sessions++; else if (a.kind === 'denied') s.denied++; else s.actions++;
+      by.set(a.email, s);
+    }
+    return [...by.values()];
+  }
+  const { cond, args } = accessWhere(range);
+  const { rows } = await pool.query(
+    `SELECT email, max(at) AS last_seen,
+       count(*) FILTER (WHERE kind = 'session')::int AS sessions,
+       count(*) FILTER (WHERE kind NOT IN ('session', 'denied'))::int AS actions,
+       count(*) FILTER (WHERE kind = 'denied')::int AS denied
+     FROM access_log ${cond} GROUP BY email ORDER BY max(at) DESC`,
+    args,
+  );
+  return rows;
 }
