@@ -1,6 +1,8 @@
 // Single-page portal: #/ requests (all boards or the user's own), #/b/<group> one board,
 // #/r/<id> request, #/new or #/b/<group>/new new request, #/admin users, #/admin/groups, #/admin/log.
 
+import { renderActivity } from './activity.js'; // activity feed panel on the request page
+
 const view = document.getElementById('view');
 let me = null;
 let meta = null;
@@ -259,6 +261,7 @@ const ACTIONS = {
   create: 'יצירת בקשה', update: 'עדכון בקשה',
   user_create: 'הוספת משתמש', user_update: 'עדכון משתמש', user_upsert: 'עדכון משתמש', user_delete: 'הסרת משתמש',
   group_create: 'הוספת קבוצה', group_update: 'עדכון קבוצה', import: 'ייבוא משתמשים',
+  post: 'עדכון פעילות',
 };
 
 const shortValue = (v) => {
@@ -312,6 +315,7 @@ async function renderRecord(id) {
   const history = data.history.length
     ? h('ul', { class: 'history' }, data.history.map((a) => h('li', {},
       h('div', { class: 'when' }, `${fmtDateTime(a.at)} · ${a.email} · ${ACTIONS[a.action] || a.action}`),
+      a.action === 'post' ? h('div', {}, a.changes?.files?.length ? `קבצים: ${a.changes.files.join(', ')}` : 'ללא קבצים') : null, // activity feed
       a.action === 'update' ? changeList(a) : null)))
     : h('p', { class: 'muted' }, 'אין עדיין שינויים מהפורטל.');
 
@@ -326,6 +330,7 @@ async function renderRecord(id) {
           h('span', {}, `נוצרה ${fmtDate(r.CreatedDate)}`),
           h('span', {}, `עודכנה ${fmtDateTime(r.LastModifiedDate)}`)))),
     h('form', { onsubmit: onSubmit, novalidate: true }, form.sections, h('div', { class: 'actions' }, save, h('a', { class: 'button', href: back }, 'ביטול'))),
+    renderActivity(r.Id, { h, api, toast, fmtDateTime }), // activity feed (public/activity.js)
     h('section', { class: 'card' }, h('h2', {}, 'היסטוריית שינויים בפורטל'), history));
 }
 

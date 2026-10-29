@@ -151,6 +151,17 @@ table.log td { font-size: .92rem; }
 
 .pager { display: flex; gap: 10px; justify-content: center; margin: 18px 0; }
 
+/* Activity feed (public/activity.js) */
+.composer { display: grid; gap: 12px; margin-bottom: 18px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+.composer textarea { min-height: 90px; }
+.composer input[type=file] { padding: 6px; }
+.feed .post { padding: 12px 0; border-bottom: 1px solid #eef0f4; }
+.feed .post:last-child { border-bottom: 0; }
+.feed .when { color: var(--muted); font-size: .85rem; margin-bottom: 4px; }
+.feed .when strong { color: var(--navy); }
+.feed .text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.feed .files { margin: 6px 0 0; padding-inline-start: 20px; }
+
 @media (max-width: 720px) {
   h1 { font-size: 1.6rem; }
   .form-grid { grid-template-columns: 1fr; }
