@@ -5,7 +5,7 @@
 const FILE_TYPES = 'PDF, Word, Excel, PowerPoint, ODT/ODS/ODP, RTF, תמונות (PNG, JPG, GIF, WEBP, HEIC), CSV, TXT ו-ZIP';
 
 function section(h, id, title, ...body) {
-  return h('section', { class: 'card help', 'aria-labelledby': id }, h('h2', { id }, title), ...body);
+  return h('section', { class: 'card help', 'aria-labelledby': id }, h('h3', { id }, title), ...body);
 }
 
 const ol = (h, items) => h('ol', {}, items.map((i) => h('li', {}, i)));

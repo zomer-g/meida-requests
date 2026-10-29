@@ -1,10 +1,71 @@
 # Accessibility audit: WCAG 2.1 AA (IS 5568)
 
-- **Date:** 2026-10-29 (phase 1, before fixes)
-- **Code audited:** branch `claude/a11y-privacy-fb5841`, based on `claude/boards-roles-53e42e` at `898c4e0`
-- **Result:** **does not meet AA yet.** 1 critical, 6 serious, 6 moderate and 8 minor findings (below). Fixes are scheduled for phase 2, after `boards-roles` is merged into `master`.
+- **Phase 2 (after fixes): 2026-10-29.** Branch `claude/a11y-privacy-fb5841`, on top of `master` `6d9a1e9` (boards-roles + access log).
+- **Result:** **meets WCAG 2.1 AA on every screen tested** (see "Phase 2" below). All 21 phase-1 findings are fixed, except F20, which was not a failure. The limits are listed under "What is still not verified".
+- Phase 1 (before fixes) found 1 critical, 6 serious, 6 moderate and 8 minor problems. That audit is kept below for reference.
 
-## How it was tested
+## Phase 2: fixes and re-test
+
+### What changed
+
+| # | Fix | Where |
+|---|---|---|
+| F1 | Lookups are an ARIA 1.2 combobox: `role=combobox`, `aria-expanded`, `aria-controls`, `aria-activedescendant`, options with ids and `aria-selected`. ArrowUp/ArrowDown move, Enter picks, Escape closes. The result count ("20 תוצאות" / "לא נמצאו תוצאות") is announced. After a pick, focus moves to the clear button. After clearing, it returns to the input. | `lookupInput` in `app.js` |
+| F2 | The lookup input has `id="f_<field>"`, so its `<label for>` works. A chosen value is a `role=group` named by the label. | `lookupInput` |
+| F3 | Every required control has `aria-required="true"`. The `*` is `aria-hidden`. Each form starts with "שדות המסומנים ב-* הם שדות חובה". | `fieldControl`, `reqNote`, admin forms |
+| F4 | Error summary (`role=alert`, focused) with links to the fields. Each field gets `aria-invalid` and an `aria-describedby` message under it, and a collapsed section with an error opens. Server 400 answers ("שדות חובה: …", "<field>: …") are mapped to the same fields. Applies to: new request, request edit, activity composer, add user, groups. | `showErrors`, `serverErrors` |
+| F5 | On navigation, focus moves to the new `h1`. After a save or another action, the screen is redrawn and focus returns to the same control (by id or `data-key`), or to the `h1`. Paging keeps focus on the pager button. | `route`, `settle`, `redraw` |
+| F6 | `--muted #5c6680` (5.25:1 on the page, 5.17:1 on light blue). Links `#1b5fb8` (5.71:1). Red text `#c8203f` (5.62:1). Closed pill `#4f5a73` (5.94:1). | `styles.css` |
+| F7 | Users table: role, group and Salesforce-user selects no longer save on `change`. Each row has its own "שמירה" button, enabled only when the row has changed. | `renderAdmin` |
+| F8 | `aria-live` removed from `<main>`. Two hidden live regions: `#sr-status` (polite) and `#sr-alert` (assertive). Lists and logs announce "N בקשות, עמוד X" / "אין רשומות". | `index.html`, `announce` |
+| F9 | The toast is visual only, with a close button. Messages are announced through the live regions. Errors stay until closed. Other messages hide after 6s. | `toast` |
+| F10 | `document.title` = "<h1> · ניהול בקשות מידע · התנועה לחופש המידע" on every screen. | `settle` |
+| F11 | Input, select and button borders `#8a94a6` (3.06:1). Focus is a 2px `#1b5fb8` outline on fields and a 3px one on everything else (`:focus-visible`). Invalid fields get a red 2px border. | `styles.css` |
+| F12 | "דילוג לתוכן" skip link as the first element. It focuses `<main tabindex=-1>` without changing the route hash. | `index.html`, `app.js` |
+| F13 | Checkbox groups are `<fieldset>` + `<legend>`. | `fieldControl` |
+| F14 | The last column header is "פעולות" (visually hidden). Tables have visually hidden `<caption>`s and `scope=col`. | users, list, logs, import preview |
+| F15 | `aria-current="page"` on the active main-nav link and board tab. The active main-nav link is also underlined. | `setActiveNav`, `renderList` |
+| F16 | The Salesforce contact error is shown as text in the row, not only in a `title`. | `renderAdmin` |
+| F17 | The top bar is inside `<header>`. | `index.html` |
+| F18 | Before a sign-in redirect (expired session), typed text in the screen's textareas is kept in `sessionStorage` and put back after returning, with a message. | `saveDrafts`, `restoreDrafts`, `activity.js` |
+| F19 | The section arrows use CSS alt text (`content: "▾" / ""`), so they are not read aloud. | `styles.css` |
+| F20 | Not changed: hidden columns on small screens are shown on the request page. | – |
+| F21 | `[hidden] { display: none !important; }`. The nav no longer shows on the no-access screen (verified: `display: none`). | `styles.css` |
+| new | Links inside running text are underlined (axe `link-in-text-block` on the log pages after the colour change). Wide tables keep their hidden captions inside the scroll box, which fixed a horizontal scroll at 320px on the users page. | `styles.css` |
+
+### Re-test results
+
+- **axe-core 4.10, WCAG 2.0/2.1 A + AA + best practice: 0 violations** on all 12 screens: all boards, one board, request page (collapsed and with all sections open), new request, users + CSV import, groups, edit log, access log, no-access, `/privacy`, `/accessibility`.
+- **Reflow at 320px: no horizontal page scroll** on all 12 screens. Every screen has a skip link and exactly one `h1`.
+- **Text spacing (1.4.12):** no clipped controls on the list, the request page or the users page.
+- **Keyboard and ARIA (scripted, `verify.mjs`):**
+  - Tab 1 is the skip link. Enter focuses `main` and leaves the hash `#/`.
+  - A board switch moves focus to the new `h1` and changes the title. "50+ בקשות, עמוד 1" is announced. Next page keeps focus on "הבא".
+  - All 3 lookups have `role=combobox` with `aria-required`. Typing opens 20 options. ArrowDown ×2 sets `aria-activedescendant` to option 2 (`aria-selected=true`). Enter picks it and focuses the clear button. Clearing focuses the input.
+  - Submitting the new-request form empty shows a focused summary with 7 errors, 7 `aria-invalid` fields each described by its message, and a summary link that focuses the field.
+  - The empty activity post, the add-user form and the group form each show the summary and mark the field.
+  - Titles are correct on all screens. The nav is hidden on the no-access screen.
+  - **No write request reached the API during the test.**
+- **Contrast (computed):** muted 5.25 / 5.73 / 5.17 (page / white / light blue), links 5.71 / 6.22 / 5.61, red text 5.62 on white and 4.77 on the error box, closed pill 5.94, field borders 3.06, focus ring 6.22.
+
+### What is still not verified
+
+- **Real screen readers** (NVDA, JAWS, VoiceOver) and **real phones**. Only the ARIA was checked, by script.
+- **Student and employee views** live. Adding a portal user creates a Salesforce Contact, so it was not done locally. They use the same screens (list without board tabs, request, new request), so the same fixes apply.
+- **Users table rows** (row save button, contact error text). The local store has no users besides the env admin. Checked in code only.
+- **Edit log, request history and import preview with real entries.** Checked in code only.
+- **Uploaded files** (PDFs, images from public bodies) are not checked and may not be accessible.
+- **Google sign-in** pages are run by xhostd and Google, not by this app.
+
+---
+
+# Phase 1 (before fixes), kept for reference
+
+- **Date:** 2026-10-29
+- **Code audited:** branch `claude/a11y-privacy-fb5841`, based on `claude/boards-roles-53e42e` at `898c4e0`
+- **Result:** did not meet AA. 1 critical, 6 serious, 6 moderate and 8 minor findings.
+
+## How it was tested (phase 1)
 
 - The app ran locally against the real Salesforce org, read-only (no form was submitted, nothing was written to Salesforce), with the in-memory store instead of Postgres:
   - as an admin (`ADMIN_EMAILS` = `DEV_USER_EMAIL`), which shows every screen and every board;
@@ -93,7 +154,3 @@ Severity: **Critical**: blocks a task for keyboard or screen-reader users. **Ser
 ## The new public pages
 
 `/privacy` and `/accessibility` are static pages (`public/privacy.html`, `public/accessibility.html`, styles in `public/pages.css`). They have a skip link, header/main/footer landmarks, one `h1`, their own titles, underlined links, colours of 4.5:1 or more and a 3px focus ring. axe reported no violations on them (see phase-1 run). The footer with both links is on every page, including the no-access screen.
-
-## Phase 2 checklist
-
-Fix F1–F17 and F21 (and F18/F19 if cheap), then re-run the axe and keyboard scripts on every screen, including the student/employee views and a log with entries. Update this document and the statement (`public/accessibility.html`) to say exactly what was verified.
