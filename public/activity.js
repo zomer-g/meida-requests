@@ -7,10 +7,10 @@ const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
 const fmtSize = (n) => (n === null || n === undefined ? '' : n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))}KB` : `${(n / 1024 / 1024).toFixed(1)}MB`);
 
-export function renderActivity(caseId, { h, api, toast, fmtDateTime }) {
+export function renderActivity(caseId, { h, api, toast, fmtDateTime, toLogin, showErrors, clearErrors }) {
   const list = h('div', { class: 'feed' }, h('p', { class: 'muted' }, 'טוען…'));
   const text = h('textarea', { id: 'feed_text', maxlength: 10000, placeholder: 'מה עשיתם בבקשה? למשל: שלחנו תזכורת לממונה, התקבלה תשובה חלקית…' });
-  const files = h('input', { id: 'feed_files', type: 'file', multiple: true, accept: ACCEPT });
+  const files = h('input', { id: 'feed_files', type: 'file', multiple: true, accept: ACCEPT, 'aria-describedby': 'feed_files_help' });
   const send = h('button', { class: 'button is-primary', type: 'submit' }, 'פרסום עדכון');
 
   const load = async () => {
@@ -30,20 +30,23 @@ export function renderActivity(caseId, { h, api, toast, fmtDateTime }) {
 
   const onSubmit = async (e) => {
     e.preventDefault();
+    const form = e.currentTarget;
     const chosen = [...files.files];
-    if (!text.value.trim() && !chosen.length) return toast('יש לכתוב עדכון או לצרף קובץ', true);
-    if (chosen.length > MAX_FILES) return toast(`אפשר לצרף עד ${MAX_FILES} קבצים`, true);
     const big = chosen.find((f) => f.size > MAX_FILE_BYTES);
-    if (big) return toast(`הקובץ ${big.name} גדול מ-10MB`, true);
+    const error = !text.value.trim() && !chosen.length ? { id: 'feed_text', label: 'עדכון חדש', message: 'יש לכתוב עדכון או לצרף קובץ' }
+      : chosen.length > MAX_FILES ? { id: 'feed_files', label: 'קבצים מצורפים', message: `אפשר לצרף עד ${MAX_FILES} קבצים` }
+        : big ? { id: 'feed_files', label: 'קבצים מצורפים', message: `הקובץ ${big.name} גדול מ-10MB` } : null;
+    if (error) return showErrors(form, [error]);
+    clearErrors(form);
     const body = new FormData();
     body.append('text', text.value);
     for (const f of chosen) body.append('files', f, f.name);
     send.disabled = true;
     try {
       const res = await fetch(`/api/requests/${caseId}/activity`, { method: 'POST', body });
-      if (res.status === 401) { location.href = `/xhost-auth/login?return_to=${encodeURIComponent(location.pathname + location.hash)}`; return; }
+      if (res.status === 401) { toLogin(); return; }
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(res.status === 413 ? 'הקבצים גדולים מדי' : data.error || `שגיאה ${res.status}`);
+      if (!res.ok) return showErrors(form, [{ message: res.status === 413 ? 'הקבצים גדולים מדי' : data.error || `שגיאה ${res.status}` }]);
       if (data.failed?.length) toast(`העדכון פורסם, אבל לא הועלו: ${data.failed.join(', ')}`, true);
       else toast('העדכון פורסם');
       text.value = '';
@@ -54,11 +57,11 @@ export function renderActivity(caseId, { h, api, toast, fmtDateTime }) {
 
   load();
   return h('section', { class: 'card' },
-    h('h2', {}, 'עדכונים ופעילות'),
-    h('form', { class: 'composer', onsubmit: onSubmit, novalidate: true },
+    h('h2', { id: 'feed_title' }, 'עדכונים ופעילות'),
+    h('form', { class: 'composer', onsubmit: onSubmit, novalidate: true, 'aria-labelledby': 'feed_title' },
       h('div', { class: 'field' }, h('label', { for: 'feed_text' }, 'עדכון חדש'), text),
       h('div', { class: 'field' }, h('label', { for: 'feed_files' }, 'קבצים מצורפים'), files,
-        h('span', { class: 'help' }, `עד ${MAX_FILES} קבצים, עד 10MB כל אחד: PDF, Office, תמונות, CSV, TXT, ZIP`)),
+        h('span', { class: 'help', id: 'feed_files_help' }, `עד ${MAX_FILES} קבצים, עד 10MB כל אחד: PDF, Office, תמונות, CSV, TXT, ZIP`)),
       h('div', {}, send)),
     list);
 }

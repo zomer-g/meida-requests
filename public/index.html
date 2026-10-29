@@ -11,26 +11,29 @@
   <link rel="stylesheet" href="/pages.css">
 </head>
 <body>
-  <div class="topbar">
-    <div class="container topbar-inner">
-      <span>מערכת ניהול בקשות חופש מידע</span>
-      <span id="who"></span>
+  <a class="skip-link" href="#view">דילוג לתוכן</a>
+  <header>
+    <div class="topbar">
+      <div class="container topbar-inner">
+        <span>מערכת ניהול בקשות חופש מידע</span>
+        <span id="who"></span>
+      </div>
     </div>
-  </div>
-  <header class="header">
-    <div class="container header-inner">
-      <a class="brand" href="#/" title="התנועה לחופש המידע"><img src="/logo.png" alt="התנועה לחופש המידע" width="204" height="50"></a>
-      <nav id="nav" class="nav" hidden>
-        <a href="#/">הבקשות</a>
-        <a href="#/admin" data-admin hidden>משתמשים</a>
-        <a href="#/admin/groups" data-admin hidden>קבוצות</a>
-        <a href="#/admin/log" data-admin hidden>יומן עריכות</a>
-        <a href="#/admin/access" data-admin hidden>יומן גישה</a>
-        <a class="button is-primary" href="#/new">+ בקשה חדשה</a>
-      </nav>
+    <div class="header">
+      <div class="container header-inner">
+        <a class="brand" href="#/"><img src="/logo.png" alt="התנועה לחופש המידע – לרשימת הבקשות" width="204" height="50"></a>
+        <nav id="nav" class="nav" aria-label="ניווט ראשי" hidden>
+          <a href="#/">הבקשות</a>
+          <a href="#/admin" data-admin hidden>משתמשים</a>
+          <a href="#/admin/groups" data-admin hidden>קבוצות</a>
+          <a href="#/admin/log" data-admin hidden>יומן עריכות</a>
+          <a href="#/admin/access" data-admin hidden>יומן גישה</a>
+          <a class="button is-primary" href="#/new">+ בקשה חדשה</a>
+        </nav>
+      </div>
     </div>
   </header>
-  <main class="container" id="view" aria-live="polite">
+  <main class="container" id="view" tabindex="-1">
     <p class="muted">טוען…</p>
   </main>
   <footer class="footer">
@@ -40,7 +43,9 @@
       <a href="/accessibility">הצהרת נגישות</a>
     </div>
   </footer>
-  <div id="toast" class="toast" role="status" hidden></div>
+  <div id="toast" class="toast" hidden><span class="toast-msg"></span><button type="button" class="toast-close" aria-label="סגירת ההודעה">×</button></div>
+  <div id="sr-status" class="sr-only" role="status" aria-live="polite"></div>
+  <div id="sr-alert" class="sr-only" role="alert"></div>
   <script type="module" src="/app.js"></script>
 </body>
 </html>
