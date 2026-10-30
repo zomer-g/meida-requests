@@ -179,7 +179,13 @@ const boardById = (id) => boards.find((b) => b.id === id) || null;
 
 // ---------- list ----------
 
-const listState = { q: '', status: 'open', page: 0 };
+const listState = { q: '', status: 'open', org: '', handler: '', owner: '', sort: 'updated', dir: 'desc', page: 0 };
+const FILTERS = ['org', 'handler', 'owner'];
+
+const statusLabel = (v) => {
+  const label = meta?.fields?.Status?.options?.find((o) => o.value === v)?.label || v;
+  return label === 'Closed' ? 'סגורה' : label === 'New' ? 'חדשה' : label;
+};
 
 async function renderList(boardId) {
   // Students and employees have exactly one board: their group's.
@@ -189,29 +195,81 @@ async function renderList(boardId) {
     return view.replaceChildren(h('div', { class: 'card' }, h('h1', {}, 'לא הוגדרה לך קבוצה'),
       h('p', {}, 'כדי לראות בקשות, מנהל/ת המערכת צריך/ה לשייך אותך לקליניקה או לעובדי התנועה.')));
   }
-  const statusOptions = meta.fields.Status?.options || [];
-  const search = h('input', { type: 'search', id: 'list_q', placeholder: 'חיפוש לפי שם בקשה או מספר', value: listState.q, 'aria-label': 'חיפוש לפי שם בקשה או מספר' });
-  const status = h('select', { id: 'list_status', 'aria-label': 'סינון לפי סטטוס' },
-    h('option', { value: 'open' }, 'בקשות פתוחות'),
-    h('option', { value: 'all' }, 'כל הבקשות'),
-    statusOptions.map((o) => h('option', { value: o.value }, o.value === 'Closed' ? 'סגורה' : o.value === 'New' ? 'חדשה' : o.label)));
-  status.value = listState.status;
+  const searchLabel = 'חיפוש לפי שם בקשה, מספר, מטפל/ת, גוף מבוקש או אסמכתא';
+  const search = h('input', { type: 'search', id: 'list_q', placeholder: searchLabel, value: listState.q, 'aria-label': searchLabel });
   const body = h('div', {}, h('p', { class: 'muted' }, 'טוען…'));
   const showBoard = me.seesAll && !board;
 
-  const load = async (pagerKey = null) => {
+  // Column filters: their options are the values present in the current list, with counts.
+  const status = h('select', { id: 'list_status', 'aria-label': 'סינון לפי סטטוס' });
+  const selects = {
+    org: h('select', { id: 'list_org', 'aria-label': 'סינון לפי גוף מבוקש' }),
+    handler: h('select', { id: 'list_handler', 'aria-label': 'סינון לפי מטפל/ת' }),
+    ...(me.seesAll ? { owner: h('select', { id: 'list_owner', 'aria-label': 'סינון לפי בעלים' }) } : {}),
+  };
+  const EMPTY = { org: 'כל הגופים', handler: 'כל המטפלים', owner: 'כל הבעלים' };
+  const NONE = { org: 'ללא גוף', handler: 'ללא מטפל/ת', owner: 'ללא בעלים' };
+  const params = () => {
+    const p = new URLSearchParams({ q: listState.q, status: listState.status });
+    for (const k of FILTERS) if (listState[k] && selects[k]) p.set(k, listState[k]);
+    if (board) p.set('board', board.id);
+    return p;
+  };
+  const clear = h('button', {
+    class: 'button is-small', type: 'button', onclick: () => {
+      Object.assign(listState, { q: '', status: 'open', org: '', handler: '', owner: '' });
+      search.value = '';
+      refresh();
+    },
+  }, 'ניקוי סינון');
+  const fillFacets = async () => {
+    clear.hidden = !(listState.q || listState.status !== 'open' || FILTERS.some((k) => listState[k]));
+    let f;
+    try { f = await api(`/requests/facets?${params()}`); } catch { return; }
+    const opt = (value, text) => h('option', { value }, text);
+    status.replaceChildren(opt('open', 'בקשות פתוחות'), opt('all', 'כל הבקשות'),
+      ...f.status.map((x) => opt(x.value, `${statusLabel(x.value)} (${x.n})`)));
+    if (![...status.options].some((o) => o.value === listState.status)) status.append(opt(listState.status, statusLabel(listState.status)));
+    status.value = listState.status;
+    for (const [k, sel] of Object.entries(selects)) {
+      const items = [...f[k]].sort((a, b) => (a.value === 'none') - (b.value === 'none') || String(a.label || '').localeCompare(String(b.label || ''), 'he'));
+      sel.replaceChildren(opt('', EMPTY[k]), ...items.map((x) => opt(x.value, `${x.value === 'none' ? NONE[k] : x.label || '—'} (${x.n})`)));
+      if (listState[k] && ![...sel.options].some((o) => o.value === listState[k])) sel.append(opt(listState[k], '(הבחירה הנוכחית)'));
+      sel.value = listState[k];
+    }
+  };
+  const refresh = () => { listState.page = 0; fillFacets(); load(); };
+
+  // Sortable header: a button per column, aria-sort on the sorted one.
+  const sortHead = (key, label, cls = null) => {
+    const on = listState.sort === key;
+    const arrow = on ? (listState.dir === 'asc' ? ' ▲' : ' ▼') : '';
+    return h('th', { class: cls, scope: 'col', 'aria-sort': on ? (listState.dir === 'asc' ? 'ascending' : 'descending') : null },
+      h('button', {
+        class: 'th-sort', type: 'button', 'data-key': `sort-${key}`, onclick: () => {
+          if (on) listState.dir = listState.dir === 'asc' ? 'desc' : 'asc';
+          else Object.assign(listState, { sort: key, dir: ['submitted', 'updated', 'number'].includes(key) ? 'desc' : 'asc' });
+          listState.page = 0;
+          load(`sort-${key}`);
+        },
+      }, label, h('span', { 'aria-hidden': 'true' }, arrow)));
+  };
+
+  const load = async (focusKey = null) => {
     body.replaceChildren(h('p', { class: 'muted' }, 'טוען…'));
-    const params = new URLSearchParams({ q: listState.q, status: listState.status, page: listState.page });
-    if (board) params.set('board', board.id);
+    const p = params();
+    p.set('sort', listState.sort);
+    p.set('dir', listState.dir);
+    p.set('page', listState.page);
     try {
-      const data = await api(`/requests?${params}`);
+      const data = await api(`/requests?${p}`);
       if (!data.records.length) {
         announce('לא נמצאו בקשות');
         return body.replaceChildren(h('p', { class: 'notice' }, 'לא נמצאו בקשות.'));
       }
-      const rows = data.records.map((r) => h('tr', { onclick: () => { location.hash = `#/r/${r.Id}`; } },
+      const rows = data.records.map((r) => h('tr', { class: r.mine ? 'mine' : null, onclick: () => { location.hash = `#/r/${r.Id}`; } },
         h('td', { class: 'num' }, r.CaseNumber),
-        h('td', {}, h('a', { href: `#/r/${r.Id}` }, r.request_name__c || '(ללא שם)')),
+        h('td', {}, h('a', { href: `#/r/${r.Id}` }, r.request_name__c || '(ללא שם)'), r.mine ? h('span', { class: 'pill mine-tag' }, 'שלי') : null),
         h('td', { class: 'hide-sm' }, r.request_org_name__r?.Name || ''),
         h('td', {}, statusPill(r.Status)),
         h('td', { class: 'hide-sm' }, r.metapel_bakasha__r?.Name || ''),
@@ -221,20 +279,20 @@ async function renderList(boardId) {
         h('td', { class: 'num hide-sm' }, fmtDate(r.LastModifiedDate))));
       body.replaceChildren(
         h('div', { class: 'table-wrap card flush' }, h('table', {},
-          h('caption', { class: 'sr-only' }, `${board ? `בקשות ${board.name}` : 'בקשות'}, עמוד ${listState.page + 1}`),
+          h('caption', { class: 'sr-only' }, `${board ? `בקשות ${board.name}` : 'בקשות'}, הבקשות שלי ראשונות, עמוד ${listState.page + 1}`),
           h('thead', {}, h('tr', {},
-            h('th', {}, 'מס׳'), h('th', {}, 'שם הבקשה'), h('th', { class: 'hide-sm' }, 'גוף מבוקש'), h('th', {}, 'סטטוס'),
-            h('th', { class: 'hide-sm' }, 'מטפל/ת'), showBoard ? h('th', { class: 'hide-sm' }, 'לוח') : null,
-            me.seesAll ? h('th', { class: 'hide-sm' }, 'בעלים') : null,
-            h('th', { class: 'hide-sm' }, 'הוגשה'), h('th', { class: 'hide-sm' }, 'עודכנה'))),
+            sortHead('number', 'מס׳'), sortHead('name', 'שם הבקשה'), sortHead('org', 'גוף מבוקש', 'hide-sm'), sortHead('status', 'סטטוס'),
+            sortHead('handler', 'מטפל/ת', 'hide-sm'), showBoard ? h('th', { class: 'hide-sm', scope: 'col' }, 'לוח') : null,
+            me.seesAll ? sortHead('owner', 'בעלים', 'hide-sm') : null,
+            sortHead('submitted', 'הוגשה', 'hide-sm'), sortHead('updated', 'עודכנה', 'hide-sm'))),
           h('tbody', {}, rows))),
         h('nav', { class: 'pager', 'aria-label': 'דפדוף' },
           h('button', { class: 'button is-small', type: 'button', 'data-key': 'pager-prev', disabled: listState.page === 0, onclick: () => { listState.page--; load('pager-prev'); } }, '→ הקודם'),
           h('span', { class: 'muted' }, `עמוד ${listState.page + 1}`),
           h('button', { class: 'button is-small', type: 'button', 'data-key': 'pager-next', disabled: !data.hasMore, onclick: () => { listState.page++; load('pager-next'); } }, 'הבא ←')));
       announce(`${data.records.length}${data.hasMore ? '+' : ''} בקשות, עמוד ${listState.page + 1}`);
-      if (pagerKey) {
-        const b = body.querySelector(`[data-key="${pagerKey}"]`);
+      if (focusKey) {
+        const b = body.querySelector(`[data-key="${focusKey}"]`);
         (b && !b.disabled ? b : body.querySelector('.pager button:not([disabled])'))?.focus();
       }
     } catch (e) {
@@ -243,8 +301,9 @@ async function renderList(boardId) {
   };
 
   let timer;
-  search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => { listState.q = search.value.trim(); listState.page = 0; load(); }, 350); });
-  status.addEventListener('change', () => { listState.status = status.value; listState.page = 0; load(); });
+  search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => { listState.q = search.value.trim(); refresh(); }, 350); });
+  status.addEventListener('change', () => { listState.status = status.value; refresh(); });
+  for (const [k, sel] of Object.entries(selects)) sel.addEventListener('change', () => { listState[k] = sel.value; refresh(); });
 
   const tabs = me.seesAll
     ? h('nav', { class: 'tabs', 'aria-label': 'לוחות' },
@@ -258,8 +317,10 @@ async function renderList(boardId) {
         h('p', { class: 'muted' }, board ? (board.kind === 'staff' ? 'הבקשות של עובדי התנועה (כל מי שאינו קליניקה)' : `הבקשות של ${board.name}`) : 'כל הבקשות בכל הלוחות')),
       h('a', { class: 'button is-primary', href: board ? `#/b/${board.id}/new` : '#/new' }, '+ בקשה חדשה')),
     ...(tabs ? [tabs] : []),
-    h('div', { class: 'toolbar', role: 'search' }, h('div', { class: 'search' }, search), h('div', {}, status)),
+    h('div', { class: 'toolbar', role: 'search' }, h('div', { class: 'search' }, search)),
+    h('div', { class: 'filters', role: 'group', 'aria-label': 'סינון לפי טור' }, status, ...Object.values(selects), clear),
     body);
+  fillFacets();
   load();
 }
 

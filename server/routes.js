@@ -20,8 +20,15 @@ api.use(requireUser);
 const PAGE_SIZE = 50;
 const LIST_FIELDS = [
   'Id', 'CaseNumber', 'request_name__c', 'Status', 'request_date__c', 'LastModifiedDate',
-  'request_org_name__r.Name', 'metapel_bakasha__r.Name', 'OwnerId', 'Owner.Name',
+  'request_org_name__r.Name', 'metapel_bakasha__r.Name', 'OwnerId', 'Owner.Name', 'asmahta_gov_number__c',
 ];
+// Sortable list columns → SOQL field.
+const SORTS = {
+  number: 'CaseNumber', name: 'request_name__c', org: 'request_org_name__r.Name', status: 'Status',
+  handler: 'metapel_bakasha__r.Name', owner: 'Owner.Name', submitted: 'request_date__c', updated: 'LastModifiedDate',
+};
+// Column filters: query parameter → the lookup field it matches, by Id.
+const FACETS = { org: 'request_org_name__c', handler: 'metapel_bakasha__c', owner: 'OwnerId' };
 const relName = (f) => f.replace(/__c$/, '__r');
 const LOOKUP_NAMES = Object.keys(LOOKUPS).map((f) => `${relName(f)}.Name`);
 const ROLE_LABELS = { student: 'סטודנט', employee: 'עובד', manager: 'מנהל', admin: 'אדמין' };
@@ -154,24 +161,79 @@ api.get('/boards', wrap(async (req, res) => {
   });
 }));
 
-api.get('/requests', wrap(async (req, res) => {
+// The list's WHERE parts from the query string; `skip` leaves out one column filter (for its own facet).
+async function listWhere(req, skip = null) {
   const boardId = parseInt(req.query.board, 10) || null;
   const where = [await scope(req.user, boardId)];
   const q = String(req.query.q || '').trim().slice(0, 80);
   if (q) {
     const like = soqlContains(q);
-    where.push(/^\d+$/.test(q) ? `(CaseNumber LIKE ${like} OR request_name__c LIKE ${like})` : `request_name__c LIKE ${like}`);
+    where.push(`(CaseNumber LIKE ${like} OR request_name__c LIKE ${like} OR asmahta_gov_number__c LIKE ${like}`
+      + ` OR metapel_bakasha__r.Name LIKE ${like} OR request_org_name__r.Name LIKE ${like})`);
   }
-  const status = String(req.query.status || 'open');
-  if (status === 'open') where.push("Status != 'Closed'");
-  else if (status !== 'all') where.push(`Status = ${soqlString(status)}`);
+  if (skip !== 'status') {
+    const status = String(req.query.status || 'open');
+    if (status === 'open') where.push("Status != 'Closed'");
+    else if (status !== 'all') where.push(`Status = ${soqlString(status)}`);
+  }
+  for (const [key, field] of Object.entries(FACETS)) {
+    if (key === skip || req.query[key] === undefined || req.query[key] === '') continue;
+    const v = String(req.query[key]);
+    if (v === 'none') where.push(`${field} = null`);
+    else if (isId(v)) where.push(`${field} = ${soqlString(v)}`);
+  }
+  return where;
+}
+
+// "Mine": requests I handle, requests I opened in the portal, and (staff) requests I own.
+async function mineCondition(user) {
+  const parts = [];
+  if (isId(user.contactId)) parts.push(`${HANDLER_FIELD} = ${soqlString(user.contactId)}`);
+  if (isId(user.sfUserId)) parts.push(`OwnerId = ${soqlString(user.sfUserId)}`);
+  const created = (await searchAudit({ email: user.email, action: 'create', pageSize: 200 })).entries.map((a) => a.case_id).filter(isId);
+  if (created.length) parts.push(`Id IN (${created.map(soqlString).join(', ')})`);
+  return parts.length ? `(${parts.join(' OR ')})` : null;
+}
+
+// One page of the list, my requests first, each part in the chosen column order.
+api.get('/requests', wrap(async (req, res) => {
+  const where = await listWhere(req);
+  const sortField = SORTS[req.query.sort] || 'LastModifiedDate';
+  const dir = req.query.dir === 'asc' ? 'ASC' : 'DESC';
+  const order = `ORDER BY ${sortField} ${dir} NULLS LAST, Id ${dir}`;
   const page = Math.max(0, Math.min(39, parseInt(req.query.page, 10) || 0));
-  const r = await query(
-    `SELECT ${LIST_FIELDS.join(', ')} FROM Case WHERE ${where.join(' AND ')} ORDER BY LastModifiedDate DESC LIMIT ${PAGE_SIZE + 1} OFFSET ${page * PAGE_SIZE}`,
-  );
+  const start = page * PAGE_SIZE;
+  const want = PAGE_SIZE + 1;
+  const select = (cond, offset, limit) => query(`SELECT ${LIST_FIELDS.join(', ')} FROM Case WHERE ${[...where, cond].filter(Boolean).join(' AND ')} ${order} LIMIT ${limit} OFFSET ${offset}`).then((r) => r.records);
+  const mine = await mineCondition(req.user);
+  let rows;
+  if (!mine) rows = await select(null, start, want);
+  else {
+    const mineCount = (await query(`SELECT COUNT() FROM Case WHERE ${[...where, mine].join(' AND ')}`)).totalSize;
+    const mineRows = start < mineCount ? (await select(mine, start, want)).map((x) => ({ ...x, mine: true })) : [];
+    const rest = want - mineRows.length;
+    rows = rest > 0 ? [...mineRows, ...await select(`(NOT ${mine})`, Math.max(0, start - mineCount), rest)] : mineRows;
+  }
   const groups = await listGroups();
-  const records = r.records.slice(0, PAGE_SIZE).map((x) => ({ ...x, board: groupOfOwner(x.OwnerId, groups)?.name || null }));
-  res.json({ records, page, hasMore: r.records.length > PAGE_SIZE });
+  const records = rows.slice(0, PAGE_SIZE).map((x) => ({ ...x, board: groupOfOwner(x.OwnerId, groups)?.name || null }));
+  res.json({ records, page, hasMore: rows.length > PAGE_SIZE });
+}));
+
+// The values each column filter can take in the current list (other filters applied), with counts.
+api.get('/requests/facets', wrap(async (req, res) => {
+  const facet = async (key, field, nameField = null) => {
+    const where = await listWhere(req, key);
+    const cols = nameField ? `${field}, ${nameField}` : field;
+    const r = await query(`SELECT ${field} v${nameField ? `, ${nameField} label` : ''}, COUNT(Id) n FROM Case WHERE ${where.join(' AND ')} GROUP BY ${cols} ORDER BY COUNT(Id) DESC LIMIT 300`);
+    return r.records.map((x) => ({ value: x.v ?? 'none', label: nameField ? x.label ?? null : x.v, n: x.n }));
+  };
+  const [status, org, handler, owner] = await Promise.all([
+    facet('status', 'Status'),
+    facet('org', 'request_org_name__c', 'request_org_name__r.Name'),
+    facet('handler', 'metapel_bakasha__c', 'metapel_bakasha__r.Name'),
+    canSeeAll(req.user) ? facet('owner', 'OwnerId', 'Owner.Name') : [],
+  ]);
+  res.json({ status, org, handler, owner });
 }));
 
 api.get('/requests/:id', wrap(async (req, res) => {

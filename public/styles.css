@@ -212,3 +212,13 @@ h1[tabindex="-1"]:focus, h2[tabindex="-1"]:focus, main[tabindex="-1"]:focus { ou
 .block { display: block; }
 .scroll-box { max-height: 340px; overflow-y: auto; }
 .mt { margin-top: 14px; }
+
+/* request list: column filters, sortable headers, my requests first */
+.filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+.filters select { flex: 1 1 180px; width: auto; max-width: 280px; }
+.th-sort { all: unset; cursor: pointer; font: inherit; color: inherit; white-space: nowrap; }
+.th-sort:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+.th-sort:hover { text-decoration: underline; }
+tbody tr.mine { background: #f4f9ff; }
+tbody tr.mine td:first-child { box-shadow: inset -4px 0 0 var(--blue); }
+.mine-tag { margin-inline-start: 8px; font-size: .75rem; }
