@@ -369,14 +369,21 @@ const userDiff = (before, after, groups) => {
   return changes;
 };
 
-// Saves users and links each to a Salesforce Contact (found by email or created) if not linked yet.
+// Saves users and links clinic users to a Salesforce Contact (found by email or created) if not linked
+// yet. Staff users are mapped to their own Salesforce user instead and get no Contact.
 async function saveUsers(actor, people, groups) {
   const current = new Map((await listUsers()).map((u) => [u.email, u]));
-  const needContact = people.filter((p) => !isId(p.sf_contact_id ?? current.get(p.email)?.sf_contact_id));
+  const groupOf = (p) => groups.find((g) => g.id === (p.group_id ?? current.get(p.email)?.group_id));
+  const needContact = people.filter((p) => groupOf(p)?.kind === 'clinic' && !isId(p.sf_contact_id ?? current.get(p.email)?.sf_contact_id));
   let contacts = new Map();
   if (needContact.length) {
     try {
-      contacts = await ensureContacts(needContact.map((p) => ({ email: p.email, name: p.name })));
+      contacts = await ensureContacts(needContact.map((p) => ({
+        email: p.email,
+        name: p.name ?? current.get(p.email)?.name,
+        type: (p.role ?? current.get(p.email)?.role) === 'student' ? 'סטודנט/ת' : 'אחר',
+        ownerId: groupOf(p).sf_owner_ids?.[0],
+      })));
     } catch (e) {
       const error = sfMessage(e);
       contacts = new Map(needContact.map((p) => [p.email, { error }]));
@@ -392,7 +399,7 @@ async function saveUsers(actor, people, groups) {
       role: p.role ?? before?.role,
       group_id: p.group_id ?? before?.group_id ?? null,
       sf_contact_id: c?.id || before?.sf_contact_id || null,
-      contact_error: c?.error || (c?.id || before?.sf_contact_id ? null : before?.contact_error) || null,
+      contact_error: groupOf(p)?.kind === 'clinic' ? c?.error || (c?.id || before?.sf_contact_id ? null : before?.contact_error) || null : null,
       sf_user_id: p.sf_user_id !== undefined ? p.sf_user_id : before?.sf_user_id ?? null,
       sf_user_name: p.sf_user_id !== undefined ? p.sf_user_name : before?.sf_user_name ?? null,
       created_by: before?.created_by || actor,

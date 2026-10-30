@@ -739,6 +739,7 @@ async function renderAdmin() {
           h('td', { dir: 'ltr' }, u.email), h('td', {}, u.name || ''), h('td', {}, rs), h('td', {}, gs), h('td', {}, sfCell),
           h('td', {}, u.sf_contact_id
             ? h('span', { class: 'pill received' }, 'מקושר')
+            : us ? h('span', { class: 'muted' }, 'לא נדרש (משויך למשתמש)') // staff: linked by Salesforce user
             : h('div', { class: 'row-actions' }, h('span', { class: 'pill refused' }, 'אין איש קשר'),
               h('button', { class: 'button is-small', type: 'button', 'data-key': key('relink'), 'aria-label': `ניסיון חוזר לקשר איש קשר ל-${u.email}`, onclick: () => relink(u) }, 'ניסיון חוזר'),
               u.contact_error ? h('small', { class: 'block muted' }, u.contact_error) : null)),

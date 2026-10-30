@@ -68,8 +68,9 @@ function splitName(name, email) {
 
 const sfError = (e) => (Array.isArray(e.errors) ? e.errors.map((x) => x?.message).filter(Boolean).join('; ') : '') || e.message;
 
-// Finds each person's Contact by email, creating the missing ones (name + email) through the API user.
-// people: [{ email, name }] → Map(email → { id } | { error }). Never updates or deletes existing Contacts.
+// Finds each person's Contact by email, creating the missing ones through the API user with the
+// required contact type and, for clinic people, the clinic's user as owner (as existing students are).
+// people: [{ email, name, type?, ownerId? }] → Map(email → { id } | { error }). Never updates or deletes existing Contacts.
 export async function ensureContacts(people) {
   const result = new Map();
   for (let i = 0; i < people.length; i += 100) {
@@ -94,6 +95,8 @@ export async function ensureContacts(people) {
             attributes: { type: 'Contact' },
             ...splitName(p.name, p.email),
             Email: p.email,
+            type_of_contact__c: p.type || 'אחר',
+            ...(p.ownerId ? { OwnerId: p.ownerId } : {}),
             ...(recordTypeId ? { RecordTypeId: recordTypeId } : {}),
           })),
         },
