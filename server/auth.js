@@ -20,11 +20,17 @@ export const adminEmails = new Set(
   (process.env.ADMIN_EMAILS || '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean),
 );
 
-const DEV_USER = process.env.NODE_ENV !== 'production' ? process.env.DEV_USER_EMAIL : null;
+// Local impersonation for development only: needs an explicit opt-in, and is refused whenever the
+// app runs on xhostd (XHOSTD_HOSTNAME) or against a real database, whatever NODE_ENV says.
+const DEV_USER = process.env.ALLOW_DEV_USER === '1' && process.env.DEV_USER_EMAIL ? process.env.DEV_USER_EMAIL.toLowerCase() : null;
+if (DEV_USER && (process.env.XHOSTD_HOSTNAME || process.env.DATABASE_URL || process.env.NODE_ENV === 'production')) {
+  throw new Error('DEV_USER_EMAIL impersonation is only allowed locally (no XHOSTD_HOSTNAME, DATABASE_URL or NODE_ENV=production)');
+}
 
 function readCookie(req, name) {
   const m = (req.headers.cookie || '').match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
-  return m ? decodeURIComponent(m[1]) : null;
+  if (!m) return null;
+  try { return decodeURIComponent(m[1]); } catch { return null; } // a malformed cookie is no cookie
 }
 
 const DEV_SESSION = `dev-${Date.now()}`;
@@ -53,25 +59,30 @@ async function identity(req) {
 // Resolves req.user = { email, name, role, groupId, contactId, sfUserId, sfUserName } or answers 401/403.
 // ADMIN_EMAILS are always admins; their portal_users row (if any) only adds a group and Contact.
 export async function requireUser(req, res, next) {
-  const who = await identity(req);
-  if (!who) return res.status(401).json({ error: 'not_signed_in', login_url: '/xhost-auth/login?return_to=/' });
-  req.identity = who; // lets the access log attribute denied requests too
-  const row = await findUser(who.email);
-  const isEnvAdmin = adminEmails.has(who.email);
-  if (!row && !isEnvAdmin) {
-    res.locals.denyReason = 'no_access'; // signed in with Google but not a portal user
-    return res.status(403).json({ error: 'no_access', email: who.email });
+  try {
+    const who = await identity(req);
+    if (!who) return res.status(401).json({ error: 'not_signed_in', login_url: '/xhost-auth/login?return_to=/' });
+    req.identity = who; // lets the access log attribute denied requests too
+    const row = await findUser(who.email);
+    const isEnvAdmin = adminEmails.has(who.email);
+    if (!row && !isEnvAdmin) {
+      res.locals.denyReason = 'no_access'; // signed in with Google but not a portal user
+      return res.status(403).json({ error: 'no_access', email: who.email });
+    }
+    req.user = {
+      ...who,
+      name: row?.name || who.name,
+      role: isEnvAdmin ? 'admin' : row.role,
+      groupId: row?.group_id ?? null,
+      contactId: row?.sf_contact_id ?? null,
+      sfUserId: row?.sf_user_id ?? null, // owner of the staff-board requests this user creates
+      sfUserName: row?.sf_user_name ?? null,
+    };
+    next();
+  } catch (e) {
+    console.error('[auth]', e.message);
+    res.status(500).json({ error: 'שגיאה פנימית' });
   }
-  req.user = {
-    ...who,
-    name: row?.name || who.name,
-    role: isEnvAdmin ? 'admin' : row.role,
-    groupId: row?.group_id ?? null,
-    contactId: row?.sf_contact_id ?? null,
-    sfUserId: row?.sf_user_id ?? null, // owner of the staff-board requests this user creates
-    sfUserName: row?.sf_user_name ?? null,
-  };
-  next();
 }
 
 export function requireAdmin(req, res, next) {
@@ -96,6 +107,8 @@ export function sameOrigin(req, res, next) {
   if (req.method === 'GET' || req.method === 'HEAD') return next();
   const origin = req.headers.origin;
   const host = req.headers.host;
-  if (!origin || new URL(origin).host !== host) return res.status(403).json({ error: 'bad_origin' });
+  let ok = false;
+  try { ok = !!origin && new URL(origin).host === host; } catch { ok = false; } // e.g. "Origin: null"
+  if (!ok) return res.status(403).json({ error: 'bad_origin' });
   next();
 }

@@ -5,6 +5,8 @@ import pg from 'pg';
 
 const url = process.env.DATABASE_URL;
 const pool = url ? new pg.Pool({ connectionString: url, max: 5 }) : null;
+// An idle client's error (database restart, failover) must not take the process down.
+pool?.on('error', (e) => console.error('[db] idle client error:', e.message));
 
 export const ROLES = ['student', 'employee', 'manager', 'admin'];
 export const GROUP_KINDS = ['clinic', 'staff'];

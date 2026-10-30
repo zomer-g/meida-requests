@@ -85,7 +85,21 @@ activity.get('/requests/:id/activity', requireUser, wrap(async (req, res) => {
 
 const multipart = express.raw({ type: 'multipart/form-data', limit: MAX_FILES * MAX_FILE_BYTES + 200 * 1024 });
 
-activity.post('/requests/:id/activity', sameOrigin, requireUser, multipart, wrap(async (req, res) => {
+// Each upload holds its files in memory a few times over, so allow one at a time per user and a
+// few overall; the rest are asked to retry instead of growing memory.
+const MAX_UPLOADS = 3;
+const uploading = new Set();
+function uploadSlot(req, res, next) {
+  const key = req.user?.email;
+  if (!key) return next();
+  if (uploading.has(key)) return res.status(429).json({ error: 'העלאה קודמת שלך עדיין בתהליך; נסו שוב בעוד רגע' });
+  if (uploading.size >= MAX_UPLOADS) return res.status(429).json({ error: 'השרת מעלה כרגע קבצים אחרים; נסו שוב בעוד רגע' });
+  uploading.add(key);
+  res.on('close', () => uploading.delete(key));
+  next();
+}
+
+activity.post('/requests/:id/activity', sameOrigin, requireUser, uploadSlot, multipart, wrap(async (req, res) => {
   const record = await caseFor(req, res);
   if (!record) return;
   if (!Buffer.isBuffer(req.body)) return res.status(400).json({ error: 'יש לשלוח טופס עם קבצים (multipart/form-data)' });
@@ -180,7 +194,8 @@ activity.get('/requests/:id/activity/files/:docId', requireUser, wrap(async (req
     'Content-Disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
     'Content-Security-Policy': "sandbox; default-src 'none'",
     'Cache-Control': 'private, no-store',
-    ...(sfRes.headers.get('content-length') ? { 'Content-Length': sfRes.headers.get('content-length') } : {}),
+    // fetch() decompresses a gzip body, so the upstream length only holds for an uncompressed one.
+    ...(sfRes.headers.get('content-length') && !sfRes.headers.get('content-encoding') ? { 'Content-Length': sfRes.headers.get('content-length') } : {}),
   });
   Readable.fromWeb(sfRes.body).on('error', () => res.destroy()).pipe(res);
 }));

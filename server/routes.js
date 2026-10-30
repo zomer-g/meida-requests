@@ -185,6 +185,12 @@ api.patch('/requests/:id', wrap(async (req, res) => {
   const meta = await getMeta();
   const before = await loadCase(req.user, req.params.id);
   if (!before) return res.status(404).json({ error: 'הבקשה לא נמצאה' });
+  // The page sends the LastModifiedDate it was opened with, so a save never silently overwrites
+  // someone else's newer change (in the portal or in Salesforce).
+  const seen = req.body?.lastModified;
+  if (seen && Date.parse(seen) !== Date.parse(before.LastModifiedDate)) {
+    return res.status(409).json({ error: 'הבקשה עודכנה בינתיים על ידי מישהו אחר. טענו את העמוד מחדש כדי לראות את השינויים, ואז שמרו שוב.' });
+  }
   const { out, errors } = cleanInput(meta, req.body?.fields, 'update');
   if (errors.length) return res.status(400).json({ error: errors.join('; ') });
   const changes = {};
@@ -272,14 +278,15 @@ api.get('/lookup/:object', wrap(async (req, res) => {
   if (!['Contact', 'Account'].includes(object)) return res.status(400).json({ error: 'bad object' });
   const q = String(req.query.q || '').trim().slice(0, 60);
   if (q.length < 2) return res.json({ records: [] });
-  const where = [`Name LIKE ${soqlContains(q)}`];
-  if (object === 'Contact' && !canSeeAll(req.user)) {
-    const hidden = (await listUsers()).filter((u) => isId(u.sf_contact_id) && u.group_id !== req.user.groupId).map((u) => `'${u.sf_contact_id}'`);
-    if (hidden.length) where.push(`Id NOT IN (${hidden.join(', ')})`);
-  }
-  const extra = object === 'Contact' ? ', Email, Account.Name' : '';
-  const r = await query(`SELECT Id, Name${extra} FROM ${object} WHERE ${where.join(' AND ')} ORDER BY Name LIMIT 20`);
-  res.json({ records: r.records.map((x) => ({ id: x.Id, name: x.Name, sub: [x.Account?.Name, x.Email].filter(Boolean).join(' · ') })) });
+  const all = canSeeAll(req.user);
+  // Filtered here rather than as a SOQL NOT IN, which would grow with the number of portal users.
+  const hidden = object === 'Contact' && !all
+    ? new Set((await listUsers()).filter((u) => isId(u.sf_contact_id) && u.group_id !== req.user.groupId).map((u) => u.sf_contact_id))
+    : new Set();
+  const extra = object === 'Contact' ? `, Account.Name${all ? ', Email' : ''}` : ''; // emails only for managers/admins
+  const r = await query(`SELECT Id, Name${extra} FROM ${object} WHERE Name LIKE ${soqlContains(q)} ORDER BY Name LIMIT 60`);
+  const records = r.records.filter((x) => !hidden.has(x.Id)).slice(0, 20);
+  res.json({ records: records.map((x) => ({ id: x.Id, name: x.Name, sub: [x.Account?.Name, x.Email].filter(Boolean).join(' · ') })) });
 }));
 
 // ---- admin ----

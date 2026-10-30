@@ -220,7 +220,7 @@ async function renderList(boardId) {
         h('td', { class: 'num hide-sm' }, fmtDate(r.request_date__c)),
         h('td', { class: 'num hide-sm' }, fmtDate(r.LastModifiedDate))));
       body.replaceChildren(
-        h('div', { class: 'table-wrap card', style: 'padding:0' }, h('table', {},
+        h('div', { class: 'table-wrap card flush' }, h('table', {},
           h('caption', { class: 'sr-only' }, `${board ? `בקשות ${board.name}` : 'בקשות'}, עמוד ${listState.page + 1}`),
           h('thead', {}, h('tr', {},
             h('th', {}, 'מס׳'), h('th', {}, 'שם הבקשה'), h('th', { class: 'hide-sm' }, 'גוף מבוקש'), h('th', {}, 'סטטוס'),
@@ -494,7 +494,7 @@ async function renderRecord(id) {
     clearErrors(formEl);
     save.disabled = true;
     try {
-      const res = await api(`/requests/${r.Id}`, { method: 'PATCH', body: { fields: form.values() } });
+      const res = await api(`/requests/${r.Id}`, { method: 'PATCH', body: { fields: form.values(), lastModified: r.LastModifiedDate } });
       toast(res.changed ? `נשמרו ${res.changed} שינויים` : 'לא היו שינויים');
       if (res.changed) await redraw(() => renderRecord(r.Id));
     } catch (err) {
@@ -549,7 +549,7 @@ async function renderNew(boardId) {
     if (!board) return ownerNote.replaceChildren('בחרו לוח. הבקשה תשויך לבעלים של הלוח שנבחר.');
     if (board.kind === 'clinic') return ownerNote.replaceChildren(`הבקשה תשויך ל${board.newOwnerName || board.name} בסיילספורס.`);
     if (board.newOwnerName) return ownerNote.replaceChildren(`הבקשה תשויך למשתמש הסיילספורס שלך: ${board.newOwnerName}.`);
-    return ownerNote.replaceChildren(h('span', { class: 'notice error', style: 'display:block' }, 'לא שויך לך משתמש סיילספורס, ולכן אי אפשר לפתוח בקשה בלוח עובדי התנועה. יש לפנות לאדמין המערכת.'));
+    return ownerNote.replaceChildren(h('span', { class: 'notice error block' }, 'לא שויך לך משתמש סיילספורס, ולכן אי אפשר לפתוח בקשה בלוח עובדי התנועה. יש לפנות לאדמין המערכת.'));
   };
   describeOwner();
   boardSelect?.addEventListener('change', () => { board = boardById(Number(boardSelect.value)); ctx.groupId = board?.id ?? null; describeOwner(); });
@@ -616,14 +616,14 @@ function importCard(groups, onDone) {
       });
       out.replaceChildren(
         h('p', {}, `${p.header ? 'שורת הכותרת דולגה. ' : ''}חדשים: ${p.counts.new} · עדכונים: ${p.counts.update} · קיימים ללא שינוי: ${p.counts.same} · שגויים (לא ייובאו): ${p.counts.invalid}`),
-        h('div', { class: 'table-wrap', style: 'max-height:340px;overflow-y:auto', tabindex: '0', role: 'region', 'aria-label': 'תצוגה מקדימה של הייבוא' }, h('table', { class: 'plain' },
+        h('div', { class: 'table-wrap scroll-box', tabindex: '0', role: 'region', 'aria-label': 'תצוגה מקדימה של הייבוא' }, h('table', { class: 'plain' },
           h('caption', { class: 'sr-only' }, 'תצוגה מקדימה של השורות בקובץ'),
           h('thead', {}, h('tr', {}, ['שורה', 'שם', 'מייל', 'מצב', 'הערה'].map((t) => h('th', { scope: 'col' }, t)))),
           h('tbody', {}, p.rows.map((r) => h('tr', { class: r.status === 'invalid' ? 'bad' : null },
             h('td', { class: 'num' }, r.line), h('td', {}, r.name), h('td', { dir: 'ltr' }, r.email),
             h('td', {}, h('span', { class: `pill ${r.status === 'invalid' ? 'refused' : r.status === 'new' ? 'received' : ''}` }, label[r.status])),
             h('td', {}, r.error || r.note || '')))))),
-        h('div', { style: 'margin-top:14px' }, go));
+        h('div', { class: 'mt' }, go));
     } catch (err) { out.replaceChildren(h('p', { class: 'notice error', role: 'alert' }, err.message)); }
   };
   for (const el of [group, role, file]) el.addEventListener('change', preview);
@@ -761,7 +761,7 @@ async function renderAdmin() {
         h('div', { class: 'field' }, h('label', { for: 'u_role' }, 'תפקיד'), role),
         h('div', { class: 'field' }, h('label', { for: 'u_group' }, 'קבוצה', h('span', { class: 'req', 'aria-hidden': 'true' }, '*')), group),
         h('div', { class: 'field' }, h('label', { for: 'u_sfuser' }, 'משתמש סיילספורס'), sfUser, sfHint)),
-      h('div', { style: 'margin-top:14px' }, h('button', { class: 'button is-primary', type: 'submit', id: 'u_submit' }, 'שמירה'))),
+      h('div', { class: 'mt' }, h('button', { class: 'button is-primary', type: 'submit', id: 'u_submit' }, 'שמירה'))),
     importCard(groups, () => redraw(renderAdmin)),
     h('div', { class: 'card table-wrap' },
       h('div', { class: 'card-head' }, h('h2', {}, `משתמשים עם גישה (${users.length})`), h('div', {}, filter)),
@@ -819,7 +819,7 @@ async function renderGroups() {
             h('span', { class: 'help' }, 'כל חברי הקליניקה פותחים בקשות בבעלות המשתמש הזה. חייב להיות אחד המשתמשים של הקליניקה.')),
         isStaff ? null : h('div', { class: 'field wide' }, h('label', { for: `g_owners_${key}` }, 'משתמשי סיילספורס שהבקשות שלהם שייכות לקליניקה', h('span', { class: 'req', 'aria-hidden': 'true' }, '*')), ownerIds,
           h('span', { class: 'help', id: `g_owners_help_${key}` }, 'בחירה של כמה משתמשים: Ctrl / Cmd עם לחיצה, או במקלדת Shift עם חצים (Ctrl עם רווח לבחירה בודדת). משתמש יכול להשתייך לקליניקה אחת בלבד.'))),
-      h('div', { style: 'margin-top:14px' }, h('button', { class: 'button is-primary', type: 'submit', id: `g_submit_${key}` }, g ? `שמירת ${g.name}` : 'הוספת הקליניקה')));
+      h('div', { class: 'mt' }, h('button', { class: 'button is-primary', type: 'submit', id: `g_submit_${key}` }, g ? `שמירת ${g.name}` : 'הוספת הקליניקה')));
   };
 
   view.replaceChildren(
@@ -863,7 +863,7 @@ async function renderLog() {
       announce(`${data.total} רשומות, עמוד ${logState.page + 1} מתוך ${pages}`);
       body.replaceChildren(
         h('p', { class: 'muted' }, `${data.total} רשומות`),
-        h('div', { class: 'card table-wrap', style: 'padding:0' }, h('table', { class: 'log' },
+        h('div', { class: 'card table-wrap flush' }, h('table', { class: 'log' },
           h('caption', { class: 'sr-only' }, 'יומן עריכות, מהחדש לישן'),
           h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, 'מתי'), h('th', { scope: 'col' }, 'מי'), h('th', { scope: 'col' }, 'פעולה'), h('th', { scope: 'col' }, 'בקשה / יעד'), h('th', { scope: 'col', class: 'hide-sm' }, 'קבוצה'), h('th', { scope: 'col' }, 'פירוט'))),
           h('tbody', {}, data.entries.map((a) => h('tr', { class: 'static' },
@@ -987,7 +987,7 @@ async function renderAccess() {
       if (!data.entries.length) body.replaceChildren(h('p', { class: 'notice' }, 'אין רשומות שמתאימות לסינון.'));
       else {
         body.replaceChildren(
-          h('div', { class: 'card table-wrap', style: 'padding:0' }, h('table', { class: 'log plain' },
+          h('div', { class: 'card table-wrap flush' }, h('table', { class: 'log plain' },
             h('caption', { class: 'sr-only' }, 'ציר זמן של כניסות ופעולות, מהחדש לישן'),
             h('thead', {}, h('tr', {}, ['מתי', 'מי', 'סוג', 'פעולה', 'בקשה', 'תוצאה', 'כתובת IP', 'דפדפן'].map((t, i) => h('th', { scope: 'col', class: i > 5 ? 'hide-sm' : null }, t)))),
             h('tbody', {}, data.entries.map((a) => h('tr', { class: a.kind === 'denied' ? 'bad' : null },

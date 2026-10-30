@@ -53,14 +53,14 @@ export async function renderStudents(view, { h, api, toast, me, boards }) {
       });
       out.replaceChildren(
         h('p', {}, `${p.header ? 'שורת הכותרת דולגה. ' : ''}חדשים: ${p.counts.new} · עדכוני שם: ${p.counts.update} · קיימים ללא שינוי: ${p.counts.same} · שגויים: ${p.counts.invalid} · רשומים בקבוצה או תפקיד אחר (לא ישתנו): ${p.counts.blocked}`),
-        h('div', { class: 'table-wrap', style: 'max-height:340px;overflow-y:auto' }, h('table', { class: 'plain' },
+        h('div', { class: 'table-wrap scroll-box' }, h('table', { class: 'plain' },
           h('caption', { class: 'sr-only' }, 'תצוגה מקדימה של הייבוא'),
           h('thead', {}, h('tr', {}, ['שורה', 'שם', 'מייל', 'מצב', 'הערה'].map((t) => h('th', { scope: 'col' }, t)))),
           h('tbody', {}, p.rows.map((r) => h('tr', { class: ['invalid', 'blocked'].includes(r.status) ? 'bad' : null },
             h('td', { class: 'num' }, r.line), h('td', {}, r.name), h('td', { dir: 'ltr' }, r.email),
             h('td', {}, h('span', { class: `pill ${['invalid', 'blocked'].includes(r.status) ? 'refused' : r.status === 'new' ? 'received' : ''}` }, STATUS[r.status])),
             h('td', {}, r.error || r.note || '')))))),
-        h('div', { style: 'margin-top:14px' }, go));
+        h('div', { class: 'mt' }, go));
     } catch (err) { out.replaceChildren(h('p', { class: 'notice error' }, err.message)); }
   });
 
@@ -93,7 +93,7 @@ export async function renderStudents(view, { h, api, toast, me, boards }) {
         h('div', { class: 'field' }, h('label', { for: 's_name' }, 'שם מלא', h('span', { class: 'req', 'aria-hidden': 'true' }, '*')), name),
         h('div', { class: 'field' }, h('label', { for: 's_email' }, 'מייל Google', h('span', { class: 'req', 'aria-hidden': 'true' }, '*')), email,
           h('span', { class: 'help', id: 's_email_help' }, 'הכתובת שאיתה הסטודנט/ית מתחבר/ת ל-Google.'))),
-      h('div', { style: 'margin-top:14px' }, h('button', { class: 'button is-primary', type: 'submit' }, 'הוספה'))),
+      h('div', { class: 'mt' }, h('button', { class: 'button is-primary', type: 'submit' }, 'הוספה'))),
     h('div', { class: 'card' },
       h('h2', {}, 'טעינת רשימה מקובץ CSV'),
       h('div', { class: 'field' }, h('label', { for: 's_file' }, 'קובץ CSV'), file,

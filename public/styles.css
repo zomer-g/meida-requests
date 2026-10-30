@@ -206,3 +206,9 @@ h1[tabindex="-1"]:focus, h2[tabindex="-1"]:focus, main[tabindex="-1"]:focus { ou
 .help-toc { display: flex; gap: 8px 20px; flex-wrap: wrap; list-style: none; padding: 0; margin: 0 0 12px; }
 .help-example { background: var(--blue-light); padding: 10px 14px; border-radius: var(--radius); font-family: Consolas, monospace; white-space: pre; overflow-x: auto; text-align: left; }
 .help h3 { color: var(--navy); font-size: 1.25rem; margin: 0 0 .5em; }
+
+/* utility classes (inline style attributes are blocked by the CSP) */
+.flush { padding: 0; }
+.block { display: block; }
+.scroll-box { max-height: 340px; overflow-y: auto; }
+.mt { margin-top: 14px; }
