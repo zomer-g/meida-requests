@@ -25,6 +25,8 @@ app.get('/healthz', (req, res) => res.json({ ok: true }));
 app.use('/api', accessLog); // records every API request after it is answered (accesslog.js)
 app.use('/api', activity); // before `api`: it parses its own multipart bodies
 app.use('/api', api);
+// The service worker is checked on every visit, so an installed app picks up a new deploy at once.
+app.get('/sw.js', (req, res) => res.set('Cache-Control', 'no-cache').sendFile(path.join(root, 'sw.js')));
 app.use(express.static(root, { index: 'index.html', maxAge: '5m', extensions: ['html'] })); // also serves /privacy, /accessibility (public, no sign-in)
 app.get(/^\/(?!api|xhost-auth).*/, (req, res) => res.sendFile(path.join(root, 'index.html')));
 

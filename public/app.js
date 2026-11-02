@@ -1173,4 +1173,19 @@ async function boot() {
 document.querySelector('.skip-link')?.addEventListener('click', (e) => { e.preventDefault(); view.focus(); view.scrollIntoView(); });
 document.querySelector('.toast-close')?.addEventListener('click', () => { document.getElementById('toast').hidden = true; });
 
+// Installing as an app on a phone (Chrome): a service worker plus the manifest make the site
+// installable; the "התקנת האפליקציה" button appears only when Chrome offers installation.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+let installPrompt = null;
+const installBtn = document.getElementById('install');
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; installBtn.hidden = false; });
+window.addEventListener('appinstalled', () => { installPrompt = null; installBtn.hidden = true; toast('האפליקציה הותקנה'); });
+installBtn?.addEventListener('click', async () => {
+  if (!installPrompt) return;
+  installPrompt.prompt();
+  await installPrompt.userChoice;
+  installPrompt = null;
+  installBtn.hidden = true;
+});
+
 boot();
