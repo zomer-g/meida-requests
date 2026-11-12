@@ -30,9 +30,16 @@ and view, create and update FOI requests (Salesforce Cases, record type `בקש�
   per-user summary, a filtered timeline and CSV export at `#/admin/access`. Kept `ACCESS_LOG_RETENTION_DAYS`
   (default 365) days, cleaned daily.
 
+- External API (`/api/v1`, `server/extapi.js`), documented at `/api-docs` (`public/api-docs.html`): other systems
+  search, read, create and update requests (every portal field, lookups by Id or by name/email) with one shared
+  token kept on the server in the `API_TOKEN` secret (comma-separated for rotation, 24+ characters; unset = API off).
+  Callers name themselves with `X-Client-Name`; every call, refused tokens included, goes to the access log as
+  `api:<name>`, and every create/update to the edit log. Acts as an admin over request Cases; never deletes.
+  20 refused tokens per IP in 10 minutes → 429.
+
 - Help pages per role at `#/help` (`public/help.js`); privacy policy at `/privacy`, accessibility statement at
   `/accessibility` (WCAG 2.1 AA / IS 5568, audit in `docs/accessibility-audit.md`).
 
-Env: `SF_LOGIN_URL`, `SF_CLIENT_ID`, `SF_CLIENT_SECRET`, `ADMIN_EMAILS`, `NODE_ENV=production`, optional `ACCESS_LOG_RETENTION_DAYS`.
+Env: `SF_LOGIN_URL`, `SF_CLIENT_ID`, `SF_CLIENT_SECRET`, `ADMIN_EMAILS`, `NODE_ENV=production`, optional `ACCESS_LOG_RETENTION_DAYS`, optional `API_TOKEN` (secret).
 Local run (impersonating a user, without a database; refused on xhostd or with `DATABASE_URL`):
 `PORT=3456 ALLOW_DEV_USER=1 DEV_USER_EMAIL=you@gmail.com ADMIN_EMAILS=you@gmail.com npm run dev`.

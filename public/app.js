@@ -983,8 +983,10 @@ const ACCESS_ACTIONS = {
   post_activity: 'הוספת עדכון פעילות', download_file: 'הורדת קובץ', lookup: 'חיפוש לשדה בחירה',
   admin_users: 'ניהול משתמשים', admin_groups: 'ניהול קבוצות', admin_import: 'ייבוא משתמשים', admin_view_edit_log: 'צפייה ביומן העריכות',
   admin_view_access_log: 'צפייה ביומן הגישה', admin_other: 'ניהול', team_students: 'ניהול סטודנטים (מנהל/ת)', team_import: 'ייבוא סטודנטים (מנהל/ת)', other: 'אחר',
+  api_ping: 'API: בדיקת טוקן', api_config: 'API: שדות / לוחות', api_lookup: 'API: חיפוש לשדה בחירה', api_list_requests: 'API: חיפוש בקשות',
+  api_view_request: 'API: צפייה בבקשה', api_create_request: 'API: יצירת בקשה', api_update_request: 'API: עדכון בקשה', api_other: 'API: אחר',
 };
-const DENY_REASONS = { no_access: 'אין לו/ה גישה לפורטל', admin_only: 'עמוד לאדמין בלבד', outside_board: 'בקשה מחוץ ללוח שלו/ה', forbidden: 'אין הרשאה', not_signed_in: 'לא מחובר/ת', managers_only: 'עמוד למנהלים בלבד', other_group: 'משתמש/ת מקבוצה אחרת' };
+const DENY_REASONS = { no_access: 'אין לו/ה גישה לפורטל', admin_only: 'עמוד לאדמין בלבד', outside_board: 'בקשה מחוץ ללוח שלו/ה', forbidden: 'אין הרשאה', not_signed_in: 'לא מחובר/ת', managers_only: 'עמוד למנהלים בלבד', other_group: 'משתמש/ת מקבוצה אחרת', no_token: 'API בלי טוקן', bad_token: 'API עם טוקן שגוי', rate_limited: 'API: יותר מדי ניסיונות שגויים' };
 
 function uaShort(ua) {
   if (!ua) return '';
@@ -1092,7 +1094,8 @@ async function renderAccess() {
   view.replaceChildren(
     h('h1', {}, 'יומן גישה'),
     h('p', { class: 'muted' }, 'מי נכנס לפורטל, מתי, ומה פתח או עשה, כולל ניסיונות שנדחו (חשבון Google בלי גישה, בקשה מחוץ ללוח, עמוד אדמין). הפירוט שדה אחרי שדה של כל שינוי נמצא ב',
-      h('a', { href: '#/admin/log' }, 'יומן העריכות'), '. ', retention),
+      h('a', { href: '#/admin/log' }, 'יומן העריכות'), '. פניות של מערכות חיצוניות דרך ה-API רשומות כאן בשם api:<שם המערכת> (',
+      h('a', { href: '/api-docs' }, 'תיעוד ה-API'), '). ', retention),
     h('section', { class: 'card', 'aria-labelledby': 'a_summary' }, h('h2', { id: 'a_summary' }, 'סיכום לפי משתמש'), summaryBody),
     h('section', { 'aria-labelledby': 'a_results' },
       h('form', { class: 'card filters', role: 'search', 'aria-label': 'סינון יומן הגישה', onsubmit: apply },

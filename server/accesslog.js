@@ -21,6 +21,15 @@ export function rememberCase(id, caseNumber) {
 
 // What a request was, from its method and path (the API's own routes).
 const ACTIONS = [
+  // External API (/api/v1, extapi.js), called with the shared token.
+  ['GET', /^\/v1\/ping$/, 'api_ping'],
+  ['GET', /^\/v1\/(fields|boards)$/, 'api_config'],
+  ['GET', /^\/v1\/lookup\/([^/]+)$/, 'api_lookup'],
+  ['GET', /^\/v1\/requests$/, 'api_list_requests'],
+  ['POST', /^\/v1\/requests$/, 'api_create_request'],
+  ['GET', /^\/v1\/requests\/([^/]+)$/, 'api_view_request'],
+  ['PATCH', /^\/v1\/requests\/([^/]+)$/, 'api_update_request'],
+  [null, /^\/v1(\/|$)/, 'api_other'],
   ['GET', /^\/me$/, 'app_open'],
   ['GET', /^\/(meta|boards)$/, 'app_config'],
   ['GET', /^\/requests$/, 'list_requests'],
@@ -47,8 +56,8 @@ function classify(method, path) {
     if (m && m !== method) continue;
     const match = path.match(re);
     if (!match) continue;
-    const caseId = path.startsWith('/requests/') && isId(match[1]) ? match[1] : null;
-    const target = action === 'download_file' ? match[2] : action === 'lookup' ? match[1] : null;
+    const caseId = /^\/(v1\/)?requests\//.test(path) && isId(match[1]) ? match[1] : null;
+    const target = action === 'download_file' ? match[2] : ['lookup', 'api_lookup'].includes(action) ? match[1] : null;
     return { action, caseId, target };
   }
   return { action: 'other', caseId: null, target: null };
@@ -70,7 +79,12 @@ export function accessLog(req, res, next) {
     try {
       const who = req.identity; // set by requireUser once the token is verified
       if (!who) return; // no valid sign-in at all (a 401 before login): nothing to attribute
-      const { action, caseId, target } = classify(req.method, path);
+      const parsed = classify(req.method, path);
+      const { action, target } = parsed;
+      // The external API may address a request by its case number; it reports the Case it touched.
+      const logged = res.locals.logCase;
+      const caseId = logged?.id || parsed.caseId;
+      if (logged?.number) rememberCase(logged.id, logged.number);
       const status = res.statusCode;
       const base = {
         email: who.email, ip: req.ip, user_agent: String(req.headers['user-agent'] || '').slice(0, 300),
@@ -100,13 +114,13 @@ export function accessLog(req, res, next) {
 // A 404 on a request id is either a wrong id or a case outside the user's board; the second is a
 // denied attempt. One unscoped query per batch tells them apart and fills the CaseNumber.
 async function resolveNotFound(rows) {
-  const ids = [...new Set(rows.filter((r) => r.status === 404 && r.case_id).map((r) => r.case_id))];
+  const ids = [...new Set(rows.filter((r) => r.status === 404 && r.case_id && !r.email?.startsWith('api:')).map((r) => r.case_id))];
   if (!ids.length) return;
   try {
     const r = await query(`SELECT Id, CaseNumber FROM Case WHERE Id IN (${ids.map((id) => `'${id}'`).join(', ')})`);
     const found = new Map(r.records.map((c) => [c.Id, c.CaseNumber]));
     for (const row of rows) {
-      if (row.status !== 404 || !found.has(row.case_id)) continue;
+      if (row.status !== 404 || row.email?.startsWith('api:') || !found.has(row.case_id)) continue;
       row.kind = 'denied';
       row.reason = 'outside_board';
       row.case_number = found.get(row.case_id);

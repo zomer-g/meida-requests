@@ -51,10 +51,10 @@ export async function loadCase(user, id) {
   return r.records[0] || null;
 }
 
-const groupInfo = (g) => (g ? { id: g.id, name: g.name, kind: g.kind } : null);
+export const groupInfo = (g) => (g ? { id: g.id, name: g.name, kind: g.kind } : null);
 
 // Turns form input into Salesforce values, accepting only portal fields and valid values.
-function cleanInput(meta, input, mode) {
+export function cleanInput(meta, input, mode) {
   const out = {};
   const errors = [];
   for (const [name, raw] of Object.entries(input || {})) {
@@ -87,7 +87,7 @@ function cleanInput(meta, input, mode) {
 
 // The handler must be a portal user with a Contact; students and employees may only pick
 // members of the request's group, managers and admins any portal user.
-async function checkHandler(user, contactId, group) {
+export async function checkHandler(user, contactId, group) {
   if (!contactId) return null;
   const [member] = await usersByContact([contactId]);
   if (!member) return 'המטפל/ת בבקשה חייב/ת להיות משתמש/ת רשום/ה בפורטל';
@@ -96,7 +96,7 @@ async function checkHandler(user, contactId, group) {
 }
 
 // Adds labels and readable values to { field: { from, to } } for the log.
-async function describeChanges(meta, changes, before = {}) {
+export async function describeChanges(meta, changes, before = {}) {
   const refIds = Object.entries(changes).filter(([k, c]) => meta.fields[k]?.type === 'reference' && c.to).map(([, c]) => c.to);
   const names = new Map();
   for (const object of ['Contact', 'Account']) {
@@ -128,14 +128,14 @@ async function describeChanges(meta, changes, before = {}) {
   return out;
 }
 
-function sfMessage(e) {
+export function sfMessage(e) {
   if (e.message?.startsWith('Salesforce token failed')) return 'החיבור לסיילספורס נכשל: פרטי ה-API (SF_CLIENT_ID / SF_CLIENT_SECRET) חסרים או שגויים';
   if (e.status === 400 && e.expose) return e.message;
   if (!(e instanceof SalesforceError)) return 'שגיאה פנימית';
   return (Array.isArray(e.errors) ? e.errors : [e.errors]).map((x) => x?.message).filter(Boolean).join('; ') || e.message;
 }
 
-const bad = (message) => Object.assign(new Error(message), { status: 400, expose: true });
+export const bad = (message) => Object.assign(new Error(message), { status: 400, expose: true });
 
 const wrap = (fn) => (req, res) => fn(req, res).catch((e) => {
   console.error('[api]', req.method, req.path, e.message);
@@ -277,7 +277,7 @@ api.patch('/requests/:id', wrap(async (req, res) => {
 
 // Who owns a new request on this board: on a clinic board the clinic's Salesforce user (every
 // member creates under it); on the staff board the creator's own Salesforce user, mapped in #/admin.
-function newCaseOwner(user, board, groups) {
+export function newCaseOwner(user, board, groups) {
   if (board.kind === 'clinic') {
     const ids = board.sf_owner_ids || [];
     const id = ids.includes(board.default_owner_id) ? board.default_owner_id : ids[0];
