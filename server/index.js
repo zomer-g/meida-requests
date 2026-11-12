@@ -5,6 +5,7 @@ import { api } from './routes.js';
 import { activity } from './activity.js'; // activity feed (posts + files) on each request
 import { migrate } from './db.js';
 import { accessLog, startAccessLog } from './accesslog.js';
+import { extApi, docsSchema } from './extapi.js';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const app = express();
@@ -22,12 +23,14 @@ app.use((req, res, next) => {
 });
 
 app.get('/healthz', (req, res) => res.json({ ok: true }));
+app.get('/api-docs/schema.json', docsSchema); // public field names for the API docs page
 app.use('/api', accessLog); // records every API request after it is answered (accesslog.js)
+app.use('/api/v1', extApi); // external API with the shared API_TOKEN (extapi.js); never falls through to the portal API
 app.use('/api', activity); // before `api`: it parses its own multipart bodies
 app.use('/api', api);
 // The service worker is checked on every visit, so an installed app picks up a new deploy at once.
 app.get('/sw.js', (req, res) => res.set('Cache-Control', 'no-cache').sendFile(path.join(root, 'sw.js')));
-app.use(express.static(root, { index: 'index.html', maxAge: '5m', extensions: ['html'] })); // also serves /privacy, /accessibility (public, no sign-in)
+app.use(express.static(root, { index: 'index.html', maxAge: '5m', extensions: ['html'] })); // also serves /privacy, /accessibility, /api-docs (public, no sign-in)
 app.get(/^\/(?!api|xhost-auth).*/, (req, res) => res.sendFile(path.join(root, 'index.html')));
 
 // Malformed JSON, oversized bodies and anything else that reaches Express: short JSON, never a stack trace.

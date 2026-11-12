@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>תיעוד API · ניהול בקשות מידע · התנועה לחופש המידע</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Assistant:wght@400;600;700&display=swap">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/pages.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">דילוג לתוכן</a>
+  <header class="header">
+    <div class="container header-inner">
+      <a class="brand" href="/"><img src="/logo.png" alt="התנועה לחופש המידע – לדף הבית של המערכת" width="204" height="50"></a>
+    </div>
+  </header>
+  <main class="container doc api-doc" id="main" tabindex="-1">
+    <h1>תיעוד API להזנת בקשות מידע</h1>
+    <p class="updated">גרסה 1 · עודכן לאחרונה: 12 בנובמבר 2026</p>
+
+    <nav class="toc" aria-label="תוכן העניינים">
+      <h2 class="toc-title">בדף הזה</h2>
+      <ol>
+        <li><a href="#overview">סקירה</a></li>
+        <li><a href="#auth">אימות: הטוקן המשותף</a></li>
+        <li><a href="#logging">רישום ביומנים</a></li>
+        <li><a href="#values">איך שולחים ערכים לשדות</a></li>
+        <li><a href="#boards">לוחות ובעלות על בקשה</a></li>
+        <li><a href="#endpoints">נקודות הקצה</a></li>
+        <li><a href="#errors">שגיאות</a></li>
+        <li><a href="#limits">מגבלות</a></li>
+        <li><a href="#fields">רשימת השדות</a></li>
+        <li><a href="#examples">דוגמאות קוד</a></li>
+      </ol>
+    </nav>
+
+    <h2 id="overview">סקירה</h2>
+    <p>ה-API מאפשר למערכות אחרות ליצור בקשות חופש מידע, לעדכן כל אחד מהשדות שלהן ולקרוא אותן, בלי להיכנס לפורטל. הבקשות נשמרות בסיילספורס (Case מסוג ״בקשה״), בדיוק כמו בקשה שנפתחה בפורטל, ואותם כללי תקינות חלים עליהן: שדות חובה, ערכים מתוך הרשימה, מטפל/ת שהוא/היא משתמש/ת פורטל וכן הלאה.</p>
+    <ul>
+      <li><strong>כתובת הבסיס:</strong> <code dir="ltr" data-base>https://&lt;השרת&gt;/api/v1</code></li>
+      <li><strong>פורמט:</strong> JSON ב-UTF-8, בבקשה ובתשובה. בבקשות POST ו-PATCH יש לשלוח <code dir="ltr">Content-Type: application/json</code>.</li>
+      <li><strong>תאריכים:</strong> <code dir="ltr">YYYY-MM-DD</code> לשדה תאריך, ו-ISO 8601 (למשל <code dir="ltr">2026-11-12T09:30:00Z</code>) לתאריך ושעה.</li>
+      <li><strong>מה אי אפשר:</strong> למחוק בקשות, להוסיף עדכוני פעילות או קבצים, ולנהל משתמשים וקבוצות. אלה נעשים רק בפורטל.</li>
+    </ul>
+    <p id="api-status" class="notice" hidden></p>
+
+    <h2 id="auth">אימות: הטוקן המשותף</h2>
+    <p>כל קריאה חייבת לכלול טוקן בכותרת <code dir="ltr">Authorization</code>:</p>
+    <pre dir="ltr"><code>Authorization: Bearer &lt;API_TOKEN&gt;
+X-Client-Name: my-system        (רשות, מומלץ)</code></pre>
+    <ul>
+      <li>הטוקן שמור על השרת בלבד, כסוד (secret) בשם <code dir="ltr">API_TOKEN</code> בהגדרות האפליקציה. הוא משותף לפורטל ולמערכות שמזינות אליו מידע: מי שצריך/ה לדחוף מידע מקבל/ת אותו מאדמין המערכת, בערוץ מאובטח.</li>
+      <li>הטוקן חייב להיות באורך 24 תווים לפחות (מומלץ 40 ומעלה, אקראי, למשל <code dir="ltr">openssl rand -hex 32</code>). כשאין טוקן מוגדר, ה-API כבוי ומחזיר 503.</li>
+      <li><strong>החלפת טוקן בלי הפסקת שירות:</strong> אפשר להגדיר כמה טוקנים מופרדים בפסיק (<code dir="ltr">API_TOKEN=new,old</code>). אחרי שכל המערכות עברו לחדש, מסירים את הישן.</li>
+      <li><code dir="ltr">X-Client-Name</code> הוא שם המערכת הקוראת (אותיות לטיניות, ספרות, נקודה, מקף וקו תחתון, עד 40 תווים). הוא מופיע ביומנים כ-<code dir="ltr">api:&lt;שם&gt;</code>, כדי שיהיה ברור מי עשה מה. בלי הכותרת הקריאה נרשמת כ-<code dir="ltr">api:client</code>.</li>
+      <li>הטוקן מעניק הרשאה של אדמין על בקשות המידע בכל הלוחות. יש לשמור אותו רק בצד השרת של המערכת הקוראת, לא בקוד שרץ בדפדפן, לא באפליקציה ולא במאגר קוד. ה-API לא מאפשר קריאות מדפדפן של אתר אחר (אין CORS).</li>
+      <li>טוקן חסר או שגוי מחזיר 401. אחרי 20 ניסיונות שגויים מאותה כתובת IP בתוך 10 דקות, הכתובת נחסמת (429) עד סוף החלון.</li>
+    </ul>
+
+    <h2 id="logging">רישום ביומנים</h2>
+    <ul>
+      <li><strong>יומן הגישה:</strong> כל קריאה ל-API נרשמת, כולל קריאות קריאה בלבד וניסיונות עם טוקן חסר או שגוי: מתי, שם המערכת (<code dir="ltr">api:&lt;שם&gt;</code>), הפעולה, הבקשה שבה נגעה הקריאה, התוצאה, כתובת IP וה-User Agent. גוף הבקשה והטוקן לא נרשמים. האדמינים רואים את זה ב״יומן גישה״ בפורטל.</li>
+      <li><strong>יומן העריכות:</strong> כל יצירה ועדכון דרך ה-API נרשמים שדה אחרי שדה (מה היה ומה נהיה), וגם מופיעים בהיסטוריה של הבקשה בפורטל, בשם <code dir="ltr">api:&lt;שם&gt;</code>.</li>
+    </ul>
+
+    <h2 id="values">איך שולחים ערכים לשדות</h2>
+    <p>השדות נשלחים באובייקט <code dir="ltr">fields</code>, לפי <strong>שם ה-API</strong> של השדה (למשל <code dir="ltr">request_name__c</code>), לא לפי התווית בעברית. הסוג של כל שדה מופיע ב<a href="#fields">רשימת השדות</a>.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">סוג</th><th scope="col">מה לשלוח</th><th scope="col">דוגמה</th></tr></thead>
+        <tbody>
+          <tr><td>string, textarea, url</td><td>מחרוזת, עד האורך המותר</td><td dir="ltr"><code>"בקשה לפרוטוקולים"</code></td></tr>
+          <tr><td>date</td><td>מחרוזת <code dir="ltr">YYYY-MM-DD</code></td><td dir="ltr"><code>"2026-11-12"</code></td></tr>
+          <tr><td>datetime</td><td>ISO 8601</td><td dir="ltr"><code>"2026-11-12T09:30:00+02:00"</code></td></tr>
+          <tr><td>boolean</td><td><code dir="ltr">true</code> / <code dir="ltr">false</code></td><td dir="ltr"><code>true</code></td></tr>
+          <tr><td>double, int, currency, percent</td><td>מספר</td><td dir="ltr"><code>120</code></td></tr>
+          <tr><td>picklist</td><td>אחד מהערכים (<code dir="ltr">value</code>, לא התווית) שברשימה של השדה</td><td dir="ltr"><code>"New"</code></td></tr>
+          <tr><td>multipicklist</td><td>מערך של ערכים, או מחרוזת מופרדת ב-<code dir="ltr">;</code></td><td dir="ltr"><code>["a", "b"]</code></td></tr>
+          <tr><td>reference (שדה בחירה)</td><td>מזהה סיילספורס, או אובייקט שמזהה את הרשומה (ראו למטה)</td><td dir="ltr"><code>"001AB00000abcdeXYZ"</code></td></tr>
+          <tr><td>כל סוג</td><td><code dir="ltr">null</code> או <code dir="ltr">""</code> מרוקנים את השדה (לא בשדות חובה)</td><td dir="ltr"><code>null</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <h3>שדות בחירה (reference)</h3>
+    <p>במקום מזהה סיילספורס אפשר לשלוח אובייקט, והשרת מוצא את הרשומה:</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">שדה</th><th scope="col">מצביע על</th><th scope="col">אובייקט במקום מזהה</th></tr></thead>
+        <tbody>
+          <tr><td dir="ltr"><code>request_org_name__c</code></td><td>גוף ציבורי (Account)</td><td dir="ltr"><code>{"name": "משרד הבריאות"}</code> – שם מדויק; אם יש יותר מאחד, צריך לשלוח מזהה</td></tr>
+          <tr><td dir="ltr"><code>request_initiator__c</code></td><td>יוזם/ת הבקשה (Contact)</td><td dir="ltr"><code>{"email": "person@example.org"}</code> – איש קשר קיים עם המייל הזה</td></tr>
+          <tr><td dir="ltr"><code>metapel_bakasha__c</code></td><td>המטפל/ת בבקשה (משתמש/ת פורטל)</td><td dir="ltr"><code>{"email": "student@example.ac.il"}</code> – משתמש/ת רשום/ה בפורטל</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>ה-API לא יוצר גופים ציבוריים או אנשי קשר חדשים. כדי למצוא מזהים, השתמשו ב-<a href="#ep-lookup"><code dir="ltr">GET /lookup</code></a>.</p>
+    <p>שדות שאינם ברשימה, או שאי אפשר למלא או לעדכן (למשל <code dir="ltr">CaseNumber</code>, <code dir="ltr">OwnerId</code>), נדחים עם שגיאה <code dir="ltr">unknown_fields</code>, כדי ששגיאת כתיב בשם שדה לא תעבור בשקט.</p>
+
+    <h2 id="boards">לוחות ובעלות על בקשה</h2>
+    <p>כל בקשה שייכת ללוח של קבוצה: קליניקה, או ״עובדי התנועה״. הלוח נקבע לפי הבעלים (Owner) של הבקשה בסיילספורס, וכך גם ב-API:</p>
+    <ul>
+      <li><strong>לוח של קליניקה:</strong> הבקשה משויכת למשתמש הסיילספורס של הקליניקה. אין צורך לשלוח בעלים.</li>
+      <li><strong>לוח עובדי התנועה:</strong> חובה לשלוח <code dir="ltr">owner_email</code>: המייל של עובד/ת התנועה שהבקשה תהיה שלו/ה. השרת משתמש במשתמש הסיילספורס ששויך לו/ה בפורטל, ואם אין, במשתמש סיילספורס פעיל עם אותו מייל.</li>
+    </ul>
+    <p>את הלוחות ומזהיהם מקבלים ב-<a href="#ep-boards"><code dir="ltr">GET /boards</code></a>. אפשר לשלוח את <code dir="ltr">board</code> כמזהה (מספר) או כשם המדויק של הלוח.</p>
+
+    <h2 id="endpoints">נקודות הקצה</h2>
+    <p>כל הנתיבים יחסיים לכתובת הבסיס <code dir="ltr" data-base>/api/v1</code>. בקשה מזוהה בנתיב (<code dir="ltr">:key</code>) לפי מזהה הסיילספורס שלה (15 או 18 תווים) או לפי מספר הבקשה (<code dir="ltr">00012345</code> או <code dir="ltr">12345</code>).</p>
+
+    <section class="endpoint" id="ep-ping" aria-labelledby="h-ping">
+      <h3 id="h-ping"><span class="method get">GET</span> <code dir="ltr">/ping</code></h3>
+      <p>בדיקה שהטוקן תקין. לא נוגע בסיילספורס.</p>
+      <pre dir="ltr"><code>200 {"ok": true, "client": "api:my-system"}</code></pre>
+    </section>
+
+    <section class="endpoint" id="ep-fields" aria-labelledby="h-fields">
+      <h3 id="h-fields"><span class="method get">GET</span> <code dir="ltr">/fields</code></h3>
+      <p>כל השדות שאפשר להזין, לפי מקטעי הטופס: שם, תווית, סוג, חובה, אורך מרבי, הסבר, אם אפשר למלא ביצירה (<code dir="ltr">createable</code>) ובעדכון (<code dir="ltr">updateable</code>), ובשדות רשימה – הערכים המותרים. הנתונים נלקחים מסיילספורס, ולכן תמיד מעודכנים.</p>
+      <pre dir="ltr"><code>200 {
+  "sections": [
+    { "key": "main", "title": "פרטי הבקשה", "fields": [
+      { "name": "Status", "label": "סטטוס", "type": "picklist", "required": true,
+        "length": 255, "help": null, "createable": true, "updateable": true, "lookup": null,
+        "options": [ { "value": "New", "label": "חדשה" }, … ] },
+      …
+    ] },
+    …
+  ]
+}</code></pre>
+    </section>
+
+    <section class="endpoint" id="ep-boards" aria-labelledby="h-boards">
+      <h3 id="h-boards"><span class="method get">GET</span> <code dir="ltr">/boards</code></h3>
+      <p>הלוחות (קבוצות). <code dir="ltr">ownerRequired: true</code> פירושו שביצירה בלוח הזה חובה לשלוח <code dir="ltr">owner_email</code>.</p>
+      <pre dir="ltr"><code>200 {
+  "boards": [
+    { "id": 1, "name": "עובדי התנועה", "kind": "staff", "owner": null, "ownerRequired": true },
+    { "id": 2, "name": "המרכז הבינתחומי", "kind": "clinic",
+      "owner": { "id": "0051n000004X6q1AAC", "name": "המרכז הבינתחומי" }, "ownerRequired": false }
+  ]
+}</code></pre>
+    </section>
+
+    <section class="endpoint" id="ep-lookup" aria-labelledby="h-lookup">
+      <h3 id="h-lookup"><span class="method get">GET</span> <code dir="ltr">/lookup/{Account|Contact|handler}?q=</code></h3>
+      <p>מציאת מזהים לשדות בחירה. <code dir="ltr">Account</code> – גופים ציבוריים, <code dir="ltr">Contact</code> – אנשי קשר (יוזמי בקשות), לפי חלק מהשם; ל-Account ול-Contact חובה <code dir="ltr">q</code> באורך 2 תווים לפחות, ומוחזרות עד 50 תוצאות. <code dir="ltr">handler</code> – משתמשי הפורטל שאפשר לבחור כמטפלים, עם המייל והקבוצה; <code dir="ltr">q</code> רשות.</p>
+      <pre dir="ltr"><code>GET /lookup/Account?q=בריאות
+200 {"records": [ {"id": "001…", "name": "משרד הבריאות"} ]}
+
+GET /lookup/handler?q=dana
+200 {"records": [ {"id": "003…", "name": "דנה כהן", "email": "dana@example.ac.il", "group": "המכללה למנהל"} ]}</code></pre>
+    </section>
+
+    <section class="endpoint" id="ep-list" aria-labelledby="h-list">
+      <h3 id="h-list"><span class="method get">GET</span> <code dir="ltr">/requests</code></h3>
+      <p>חיפוש בקשות, מהעדכנית לישנה. כל הפרמטרים רשות ואפשר לשלב ביניהם:</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">פרמטר</th><th scope="col">משמעות</th></tr></thead>
+          <tbody>
+            <tr><td dir="ltr"><code>caseNumber</code></td><td>מספר בקשה מדויק</td></tr>
+            <tr><td dir="ltr"><code>asmahta</code></td><td>מספר האסמכתא של הגוף הציבורי, מדויק (<code dir="ltr">asmahta_gov_number__c</code>)</td></tr>
+            <tr><td dir="ltr"><code>q</code></td><td>טקסט חופשי בשם הבקשה, באסמכתא ובשם הגוף</td></tr>
+            <tr><td dir="ltr"><code>status</code></td><td>ערך מדויק של סטטוס</td></tr>
+            <tr><td dir="ltr"><code>board</code></td><td>מזהה או שם של לוח</td></tr>
+            <tr><td dir="ltr"><code>modifiedSince</code></td><td>רק בקשות ששונו מאז (ISO 8601). שימושי לסנכרון.</td></tr>
+            <tr><td dir="ltr"><code>limit</code>, <code>offset</code></td><td>דפדוף: עד 200 בעמוד (ברירת מחדל 50), offset עד 2000</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <pre dir="ltr"><code>GET /requests?asmahta=2026-1234
+200 {
+  "records": [ { "id": "500…", "caseNumber": "00012345", "name": "פרוטוקולי הוועדה", "status": "New",
+    "requestDate": "2026-11-01", "asmahta": "2026-1234", "org": "משרד הבריאות",
+    "ownerName": "המרכז הבינתחומי", "board": "המרכז הבינתחומי", "lastModified": "2026-11-12T08:00:00.000+0000" } ],
+  "limit": 50, "offset": 0, "hasMore": false
+}</code></pre>
+    </section>
+
+    <section class="endpoint" id="ep-get" aria-labelledby="h-get">
+      <h3 id="h-get"><span class="method get">GET</span> <code dir="ltr">/requests/:key</code></h3>
+      <p>בקשה אחת עם כל השדות. <code dir="ltr">lookupNames</code> נותן את השמות של שדות הבחירה. עם <code dir="ltr">?history=1</code> מתקבלת גם היסטוריית השינויים שנעשו דרך הפורטל וה-API.</p>
+      <pre dir="ltr"><code>200 {
+  "id": "500…", "caseNumber": "00012345", "ownerName": "המרכז הבינתחומי",
+  "board": { "id": 2, "name": "המרכז הבינתחומי", "kind": "clinic" },
+  "lastModified": "2026-11-12T08:00:00.000+0000",
+  "CaseNumber": "00012345", "OwnerId": "005…", "CreatedDate": "…", "LastModifiedDate": "…", "ClosedDate": null,
+  "fields": { "request_name__c": "פרוטוקולי הוועדה", "Status": "New", … },
+  "lookupNames": { "request_org_name__c": "משרד הבריאות", "metapel_bakasha__c": "דנה כהן" }
+}</code></pre>
+    </section>
+
+    <section class="endpoint" id="ep-create" aria-labelledby="h-create">
+      <h3 id="h-create"><span class="method post">POST</span> <code dir="ltr">/requests</code></h3>
+      <p>יצירת בקשה. גוף הבקשה:</p>
+      <ul>
+        <li><code dir="ltr">board</code> (חובה) – מזהה או שם של לוח.</li>
+        <li><code dir="ltr">owner_email</code> – חובה בלוח עובדי התנועה בלבד (ראו <a href="#boards">לוחות ובעלות</a>).</li>
+        <li><code dir="ltr">fields</code> (חובה) – ערכי השדות. כל שדות החובה (מסומנים ב<a href="#fields">רשימה</a>) חייבים להופיע.</li>
+      </ul>
+      <pre dir="ltr"><code>POST /requests
+{
+  "board": "המרכז הבינתחומי",
+  "fields": {
+    "request_name__c": "פרוטוקולי ועדת המכרזים 2025",
+    "Description": "בקשה לקבלת כל הפרוטוקולים של ועדת המכרזים בשנת 2025",
+    "Status": "New",
+    "request_date__c": "2026-11-12",
+    "request_org_name__c": { "name": "משרד הבריאות" },
+    "request_initiator__c": { "email": "person@example.org" },
+    "metapel_bakasha__c": { "email": "student@example.ac.il" },
+    "Origin": "Web"
+  }
+}
+
+201 { "id": "500…", "caseNumber": "00012346",
+      "board": { "id": 2, "name": "המרכז הבינתחומי", "kind": "clinic" },
+      "ownerName": "המרכז הבינתחומי", "lastModified": "2026-11-12T09:30:00.000+0000" }</code></pre>
+      <p class="muted">הערכים <code dir="ltr">"New"</code> ו-<code dir="ltr">"Web"</code> הם דוגמה. הערכים האמיתיים של כל רשימה מופיעים ב-<code dir="ltr">GET /fields</code> ובטבלה למטה.</p>
+    </section>
+
+    <section class="endpoint" id="ep-update" aria-labelledby="h-update">
+      <h3 id="h-update"><span class="method patch">PATCH</span> <code dir="ltr">/requests/:key</code></h3>
+      <p>עדכון חלק מהשדות או כולם. נשלחים רק השדות שרוצים לשנות; שדה שערכו זהה לקיים לא נחשב שינוי. אפשר לצרף <code dir="ltr">lastModified</code> כפי שהתקבל בקריאה הקודמת, ואז אם מישהו שינה את הבקשה בינתיים העדכון נדחה ב-409 ולא דורס את השינוי שלו.</p>
+      <pre dir="ltr"><code>PATCH /requests/00012346
+{
+  "lastModified": "2026-11-12T09:30:00.000+0000",
+  "fields": {
+    "Status": "Answered",
+    "first_Answerd__c": "2026-12-01",
+    "Answer__c": "התקבלו הפרוטוקולים במלואם"
+  }
+}
+
+200 { "ok": true, "id": "500…", "caseNumber": "00012346",
+      "changed": ["Status", "first_Answerd__c", "Answer__c"],
+      "lastModified": "2026-12-01T10:00:00.000+0000" }</code></pre>
+    </section>
+
+    <h2 id="errors">שגיאות</h2>
+    <p>כל שגיאה מוחזרת כ-JSON עם קוד קבוע ב-<code dir="ltr">error</code> והסבר בעברית ב-<code dir="ltr">message</code>. בשגיאות תקינות יש גם <code dir="ltr">errors</code> (רשימה), ולפעמים <code dir="ltr">missing</code> או <code dir="ltr">fields</code> עם שמות השדות.</p>
+    <pre dir="ltr"><code>400 { "error": "invalid", "message": "שדות חובה חסרים: Origin; סטטוס: ערך לא ברשימה",
+      "errors": ["שדות חובה חסרים: Origin", "סטטוס: ערך לא ברשימה"], "missing": ["Origin"] }</code></pre>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">סטטוס</th><th scope="col">error</th><th scope="col">מתי</th></tr></thead>
+        <tbody>
+          <tr><td>400</td><td dir="ltr"><code>invalid</code></td><td>שדות חובה חסרים, ערך לא תקין או לא ברשימה, שדה בחירה שלא נמצא</td></tr>
+          <tr><td>400</td><td dir="ltr"><code>unknown_fields</code></td><td>שם שדה לא מוכר, או שדה שאי אפשר למלא או לעדכן</td></tr>
+          <tr><td>400</td><td dir="ltr"><code>bad_board</code>, <code>owner_required</code>, <code>owner_not_found</code></td><td>לוח לא נמצא; חסר <code dir="ltr">owner_email</code> בלוח עובדי התנועה; לא נמצא לו משתמש סיילספורס</td></tr>
+          <tr><td>400</td><td dir="ltr"><code>bad_handler</code></td><td>המטפל/ת אינו/ה משתמש/ת רשום/ה בפורטל</td></tr>
+          <tr><td>400</td><td dir="ltr"><code>bad_request</code>, <code>bad_json</code></td><td>סיילספורס דחה את השמירה (ההסבר ב-message); גוף שאינו JSON תקין</td></tr>
+          <tr><td>401</td><td dir="ltr"><code>no_token</code>, <code>bad_token</code></td><td>אין טוקן, או שהטוקן שגוי</td></tr>
+          <tr><td>404</td><td dir="ltr"><code>not_found</code>, <code>no_such_endpoint</code></td><td>הבקשה לא נמצאה; נתיב לא קיים</td></tr>
+          <tr><td>409</td><td dir="ltr"><code>conflict</code></td><td>הבקשה השתנתה אחרי <code dir="ltr">lastModified</code> שנשלח. התשובה כוללת את הערך העדכני</td></tr>
+          <tr><td>413</td><td dir="ltr"><code>too_large</code></td><td>גוף הבקשה גדול מ-1MB</td></tr>
+          <tr><td>429</td><td dir="ltr"><code>too_many_attempts</code></td><td>יותר מדי ניסיונות עם טוקן שגוי מאותה כתובת</td></tr>
+          <tr><td>500</td><td dir="ltr"><code>server_error</code></td><td>תקלה בשרת או בחיבור לסיילספורס. אפשר לנסות שוב מאוחר יותר</td></tr>
+          <tr><td>503</td><td dir="ltr"><code>api_disabled</code></td><td>לא הוגדר <code dir="ltr">API_TOKEN</code> בשרת</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 id="limits">מגבלות</h2>
+    <ul>
+      <li>גוף בקשה עד 1MB. בקשה אחת בכל קריאה (אין יצירה מרובה); לייבוא גדול, שלחו בזו אחר זו.</li>
+      <li>סיילספורס מגביל את מספר קריאות ה-API ביום לכל הארגון, והפורטל משתמש באותה מכסה. כל יצירה צורכת כמה קריאות. לסנכרון, העדיפו <code dir="ltr">modifiedSince</code> על פני קריאה של כל הבקשות.</li>
+      <li>לפני יצירה כדאי לבדוק אם הבקשה כבר קיימת (למשל <code dir="ltr">GET /requests?asmahta=…</code>), כי ה-API לא מונע כפילויות.</li>
+    </ul>
+
+    <h2 id="fields">רשימת השדות</h2>
+    <p id="fields-intro">השדות לפי מקטעי הטופס. <strong>*</strong> = שדה חובה ביצירה.</p>
+    <div id="fields-live" class="card live-box">
+      <p id="fields-source" class="muted">כאן מופיעים שמות השדות בלבד. כדי לראות גם תוויות, סוגים והערכים המותרים בכל רשימה, היכנסו לפורטל ורעננו את הדף, או הדביקו את הטוקן (הוא נשאר רק בדף הזה ולא נשמר):</p>
+      <form id="token-form" class="token-form">
+        <label for="token">טוקן API</label>
+        <input id="token" type="password" autocomplete="off" dir="ltr" spellcheck="false">
+        <button type="submit" class="button is-small">טעינת השדות</button>
+      </form>
+      <p id="fields-error" class="notice error" role="alert" hidden></p>
+    </div>
+    <div id="fields-table" aria-live="polite"><p class="muted">טוען…</p></div>
+
+    <h2 id="examples">דוגמאות קוד</h2>
+    <h3>curl</h3>
+    <pre dir="ltr"><code data-example="curl"></code></pre>
+    <h3>Python</h3>
+    <pre dir="ltr"><code data-example="python"></code></pre>
+    <h3>Node.js</h3>
+    <pre dir="ltr"><code data-example="node"></code></pre>
+
+    <p>שאלות על ה-API, או בקשה לטוקן: אדמין המערכת בתנועה לחופש המידע, <a href="mailto:office@meida.org.il" dir="ltr">office@meida.org.il</a>.</p>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <span>© התנועה לחופש המידע</span>
+      <a href="/privacy">מדיניות פרטיות</a>
+      <a href="/accessibility">הצהרת נגישות</a>
+      <a href="/api-docs" aria-current="page">תיעוד API</a>
+    </div>
+  </footer>
+  <script type="module" src="/api-docs.js"></script>
+</body>
+</html>
